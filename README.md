@@ -5,12 +5,16 @@ turns a merchant's failed/pending payments into money won back: it diagnoses why
 payment failed, scores how likely it is to be recovered, and drafts the outreach —
 prioritized by the rupees you can actually get back.
 
-And not every failed payment is lost revenue — some are fraud. Recover also scans the
-stream for **card-testing attacks** (bursts of tiny failed authorizations across many
-cards) and quarantines them from recovery, so you never message a fraudster.
+And not every failed payment is lost revenue — some are fraud. Recover checks every
+failure with **two independent fraud signals** and quarantines the payment if **either**
+fires, so you never message a fraudster:
 
-It's an agent loop: **observe** (ingest failures) → **decide** (diagnose + score + detect
-fraud) → **act** (recover the real ones, quarantine the attacks).
+1. **Card-testing burst detector** — bursts of tiny failed authorizations across many cards.
+2. **Graph model** — a graph neural network (GCN) risk score for the payment's linked graph
+   node (trained on the real Elliptic Bitcoin transaction graph; see "Graph fraud signal").
+
+It's an agent loop: **observe** → **fraud check** (burst + graph) → **diagnose** → **score
+P(recover)** → **draft** → **send** (quarantined payments never get past the fraud check).
 
 ## Why it's real, not a simulation
 
@@ -39,6 +43,8 @@ make run           # → http://localhost:8090
 ```
 
 Open it, drop in `sample_failed_payments.csv` (or your own export), and draft messages.
+To also turn on the graph fraud signal, start the fraud service and set `FRAUD_URL` (see "Graph fraud signal" below);
+without it everything works exactly as before.
 
 To turn on AI-written messages (optional — templates work without it):
 
@@ -55,7 +61,7 @@ Docker: `docker build -t recover . && docker run -p 8090:8090 -e HF_TOKEN=$HF_TO
 
 `charge_id, created_at, amount, currency, payment_method, failure_code,
 customer_email, customer_name` (extra columns are ignored; a `recovered`
-column, if present, trains the model). Amounts are in the smallest unit (paise/cents).
+column, if present, trains the model; an optional `graph_node_id` column links a row to the graph model). Amounts are in the smallest unit (paise/cents).
 
 ## Architecture
 
@@ -65,8 +71,26 @@ generation (HF LLM + template fallback), `executor.go` = the ACT step (real
 Twilio/SMTP send + retry scheduling, with a dry-run fallback), `webhook.go` = live Stripe ingestion (signature-verified `charge.failed`) + optional
 `AUTO_RECOVER`, `fraud.go` = card-testing detection, `/api/recover` = drop-in developer
 endpoint, `main.go` = CSV pipeline + JSON API, `web/` = the UI.
-Observe (CSV upload **or** live Stripe webhook) → decide (diagnose+score) → act
-(send+schedule), with a human approving the run. `/execute` is rate-limited per IP.
+`graphsignal.go` = the graph model as the second fraud signal, `fraudclient.go` = its
+fail-open HTTP client, `router.go`/`recovery_bridge.go` = the SmartRoute payment router and
+its hand-off to the agent. The UI is `web/index.html` + `app.css` + `app.js` (vanilla JS,
+no framework). The graph model is a separate small Python service (`fraud/`).
+
+```
+ CSV upload ─┐                        ┌──────────── Go app :8090 ───────────────────────────────┐
+ Stripe hook ┼─ observe ─► FRAUD CHECK ─► diagnose ─► score P(recover) ─► draft ─► send (SMTP/SMS)
+ /simulate  ─┤              │   │            (decline    (logistic        (LLM or    │
+ /api/recover┘              │   │             codes)      regression)     template)  ▼
+                            │   └─ signal 2: graph risk ──────────┐              action log
+                            │      (GET /score, POST /score_batch)│
+                            └─ signal 1: card-testing burst       ▼
+                               either one ⇒ QUARANTINE      fraud service :8100 (FastAPI, numpy only,
+                               (never messaged)             precomputed GCN scores; Lambda-ready)
+                                                            fail-open: down/off ⇒ Recover runs as before
+```
+
+Observe (CSV upload **or** live Stripe webhook) → fraud check → decide (diagnose+score) →
+act (send+schedule), with a human approving the run. `/execute` is rate-limited per IP.
 
 ## Sending for real
 
@@ -113,13 +137,16 @@ to you — so a reviewer can trigger a real recovery run and receive it themselv
 Combined with per-IP rate limiting, that makes the live link safe to share. (Note:
 a Twilio trial only sends to numbers you've verified, which further limits abuse.)
 
-## Fraud detection (card-testing)
+## Fraud detection (two signals)
 
 Fraudsters test stolen cards by firing bursts of tiny authorizations — and those land
 in the same failed-payment stream. `fraud.go` clusters failures that match the
 signature (many small-value failures in a short window across many cards) and flags
-them as a threat. Flagged rows are **quarantined**: excluded from recoverable revenue
-and never messaged. Try it in the app with **"try attack sample."**
+them as a threat. The graph model (`graphsignal.go`) is a second, independent signal.
+A payment is **quarantined** — excluded from recoverable revenue and never messaged — if
+**either** fires. Every row and event carries `fraud_signals` saying which fired and why.
+Try it with **"try attack sample"** (burst rows are quarantined by signal 1; one other row is
+quarantined by the graph model alone).
 
 ## Drop-in integration
 
@@ -145,7 +172,7 @@ dataset with known outcomes. Example run:
 |---|---|---|---|---|---|
 | Do nothing | ₹0 | 0% | 0 | 0 | — |
 | Blast everyone | ₹35,275 | 100% | 52 | 12 | 48% |
-| Recover (agent) | ₹29,878 | 85% | 29 | 0 | 76% |
+| Recover (smart agent) | ₹29,878 | 85% | 29 | 0 | 76% |
 
 The agent captures ~85% of recoverable revenue with roughly half the messages and
 zero fraudsters contacted. It does not out-recover blast-everyone on raw money — it
@@ -165,29 +192,28 @@ personalized outreach, card-testing quarantine, and a merchant-owned audit trail
 - Real card re-charge via gateway APIs (needs live credentials + stored mandates).
 - Opt-out/compliance, auth & multi-tenancy for production scale.
 
-## Graph fraud detection (SmartRoute router + GNN)
+## Graph fraud signal
 
-The Go server now contains the **SmartRoute router** (EWMA gateway health, circuit breaker, failover under one
-idempotency key; ported from the SmartRoute project into `cmd/server/router.go`) and asks a **graph fraud service** for a risk
-score *before* choosing a gateway. Gateways are the mock PSPs in `cmd/psp` (simulated, not real acquirers).
+**Honest labeling:** the model is a **FRAUD** model trained on the real **Elliptic Bitcoin transaction graph**, not card
+payments. It does **not** predict recovery: P(recover) is still the logistic regression in `model.go`. A card payment has no node
+in a Bitcoin graph, so payments are linked to nodes explicitly or by a labeled **demo link** (below). The integration demonstrates the
+architecture pattern (a fraud service scoring a graph), not a claim that the model works on card data. Scores are **precomputed**
+per node (a lookup, not live inference); there is no Neo4j.
 
-**Honest labeling:** the model is trained on the **Elliptic Bitcoin transaction graph**, not card payments. The
-integration demonstrates the architecture pattern (router consults a graph fraud service), not a claim that the model
-works on card data. Scores are **precomputed** per node (a lookup, not live inference), and there is no Neo4j.
+**New fields** (additive; nothing existing was renamed or removed) in `/analyze` rows, `/live` items, `/api/recover` and `/simulate`:
+`graph_risk` (null unless the model answered), `graph_status` (`ok`/`offline`/`not_linked`/`disabled`), `graph_link` (`explicit`/`demo`),
+`graph_node_id`, `fraud_signals` (each `{kind: card_testing|graph_risk, level: quarantine|review, detail}`) and `quarantined`.
+`/analyze` summary gains `graph_status graph_review graph_quarantined quarantined_total`; `/overview` gains `graph_checked graph_review graph_quarantined`.
 
-### How it fits together
+**Rules:** `graph_risk >= 0.8` => quarantine; `0.5 <= risk < 0.8` => review (flagged, still recoverable). Override with
+`FRAUD_BLOCK_AT` / `FRAUD_REVIEW_AT`. **Fail-open:** if `FRAUD_URL` is unset the signal is `disabled`; if the service is down it is
+`offline`; either way Recover behaves exactly as before (tested: outputs are identical to the no-graph run).
 
-```
-POST /api/route {"amount":499,"fraud_node_id":123}
-   -> fraud service GET /score/123  (FRAUD_URL, 300 ms timeout, FAIL-OPEN)
-   -> risk >= 0.8 BLOCKED (no gateway touched) | >= 0.5 REVIEW (routed, flagged) | else ROUTED
-   -> SmartRoute picks a gateway (EWMA + breaker + failover)
-response: the existing fields (status, psp, attempts, tried, policy) + fraud_check, fraud_decision, fraud_risk, fraud_latency_ms
-```
-
-`fraud_node_id` is optional. Without it, routing behaves as before (`fraud_check: "skipped"`).
-**Fail-open:** if the fraud service is down, slow or returns bad data, the payment is routed anyway and the response says
-`fraud_check: "unavailable"` (tested in `cmd/server/fraudclient_test.go`).
+**Linking payments to nodes:** (1) an explicit `graph_node_id` (CSV column, Stripe `metadata.graph_node_id`, or the `/api/recover` field);
+(2) simulated and webhook events without one get a labeled **demo link** to a random test-period node, `GRAPH_DEMO_ILLICIT_PCT` percent (default 25)
+of them to an illicit node so the signal is visible (real prevalence in the test period is 1083/16670); (3) uploaded rows
+without the column show "no graph link" and get no graph signal. The shipped sample CSVs carry a seeded, stratified demo link
+(`scripts/make_graph_samples.py`); whatever the model scores them is shown as-is.
 
 ### Measured results
 
@@ -207,45 +233,45 @@ logistic regression has no randomness. F1 is for the illicit class at threshold 
 slightly *ahead* with the 93 local features. The graph's clear gain is **PR-AUC** (precision among the top-ranked), and the
 GCN's illicit F1 at 0.5 is higher because logistic regression flags far too many transactions. 72 of the 165 features are
 already neighbour aggregates, so `logreg 165` has some graph information; the 93-feature rows are the cleaner graph-vs-no-graph test.
+The 52-payment recovery benchmark does **not** use the graph model; its table is unchanged and sits beside these metrics in the UI.
 
-**Thresholds** (from the GCN threshold table; chosen on the test split, so these numbers are optimistic): block at **0.8**
-(precision 0.783, recall 0.357, 494 flagged) because wrongly blocking a customer is costly;
-review at **0.5** (precision 0.477, recall 0.607). Override with `FRAUD_BLOCK_AT` / `FRAUD_REVIEW_AT`.
-In practice most illicit transactions are *not* blocked at 0.8; the UI shows those misses instead of hiding them.
+**Thresholds** (from the GCN threshold table, chosen on the test split, so these numbers are optimistic): quarantine at **0.8**
+(precision 0.783, recall 0.357, 494 flagged) because wrongly quarantining a customer is costly;
+review at **0.5** (precision 0.477, recall 0.607). Most illicit transactions are **not** quarantined at 0.8; the UI shows those misses.
 
-**Serving latency** (local, uvicorn, 1000 sequential requests, no network, **not Lambda**): p50 0.46 ms,
-p95 0.58 ms (1-hop); p50 0.49 ms, p95 0.64 ms (2-hop).
-Lambda package (built locally, not deployed): 80.9 MB unzipped, 25.1 MB zipped. Cold vs warm Lambda latency: **not measured** (needs a real deployment).
+**Serving** (local, uvicorn, 1000 sequential requests, no network, **not Lambda**): p50 0.46 ms, p95 0.58 ms.
+Lambda package (built locally, not deployed): 80.9 MB unzipped, 25.1 MB zipped. Cold vs warm Lambda latency: **not measured**.
 
-### Run it
+### Run it (Go app + fraud service)
 
 ```bash
-make fraud-venv            # one-time: creates fraud/.venv (training) and fraud/.venv-serve (serving, no torch)
-make fraud-train           # offline; downloads Elliptic (~150 MB); writes fraud/artifacts/* (about 6 minutes on CPU)
+make fraud-venv            # one-time: fraud/.venv (training) and fraud/.venv-serve (serving, no torch)
+make fraud-train           # optional, offline (~6 min on CPU, ~150 MB download); artifacts are already committed
 make fraud-serve           # fraud service on :8100
-make psps                  # mock gateways on :9001-:9003 (second terminal)
-FRAUD_URL=http://localhost:8100 make run     # Recover + router on :8090 (third terminal)
-make fraud-bench           # latency benchmark (starts its own copy of the service on :8101)
+FRAUD_URL=http://localhost:8100 make run     # Recover on :8090 (second terminal)
+make psps                  # optional: mock gateways :9001-:9003 for the payment-router demo (third terminal)
 make test                  # go vet + go test
+make fraud-bench           # latency benchmark (starts its own copy of the service on :8101)
+scripts/regression.sh bin/server final       # backend regression (see REGRESSION_CHECKLIST.md)
 ```
 
-Open `http://localhost:8090/fraud.html`. Ports: Recover 8090, fraud service 8100, mock PSPs 9001-9003.
-AWS: see `fraud/DEPLOY_AWS.md` (nothing is deployed). Postman: import `fraud/postman_collection.json` plus `fraud/postman_env_local.json`.
+Open `http://localhost:8090/`. Without `FRAUD_URL`, Recover runs exactly as before and the UI shows "graph model: off".
+AWS: `fraud/DEPLOY_AWS.md` (nothing is deployed). Postman: `fraud/postman_collection.json` plus `fraud/postman_env_local.json`.
 
-### Sample cases and the Recover agent (failed payments get emails)
+### Dashboard
 
-A payment the router cannot complete is handed to the Recover agent (`cmd/server/recovery_bridge.go`), the same
-diagnose -> score -> draft -> send loop the dashboard uses:
+One page, six tabs in pipeline order: **Overview** (live pipeline diagram with moving events, KPIs, activity chart, outcome bar) ·
+**Recovery Plan** (CSV upload, fraud-signal chips per row, failure-bucket chart, agent run) · **Live** (Stripe/simulated failures, graph-risk strip
+chart, SmartRoute router demo) · **Fraud Model** (score a node, neighbourhood, risk distribution, precision-recall, GCN vs baseline, report card) ·
+**Benchmark** (existing table + graph-model metrics) · **Drop-in API** (curl example, live "Try it").
 
-- **All gateways failed** -> the router classes it as `gateway_timeout` (the mock PSPs give no decline code), it appears in the
-  dashboard's Live feed and counters, and the agent drafts a recovery message and sends it (real SMTP/Twilio if configured,
-  otherwise `simulated`). The response gains a `recovery` object (type, channel, status, detail, message).
-- **Fraud check BLOCKED** -> quarantined and **never messaged**; counted as a threat on the dashboard.
-- Optional request fields: `customer_name`, `customer_email`, `currency`, `demo_recipient`. Amounts are in the smallest unit (paise).
+### Payment router and the recovery bridge (SmartRoute)
 
-On `/fraud.html`, **Run sample cases** sends 3 illicit + 7 licit test-period transactions through the router. **Kill all gateways**
-makes every payment fail so you can watch the recovery emails appear; **Restore gateways** brings them back. The same chaos
-switch is `POST /api/route/chaos?psp=all|psp-a&down=true|false`.
+The Go app also contains the SmartRoute router (`router.go`: EWMA gateway health, circuit breaker, failover under one idempotency key) over
+mock PSPs (`cmd/psp`). `POST /api/route` accepts an optional `fraud_node_id` and fails open the same way. A payment the router cannot complete
+(every gateway failed) is handed to the Recover agent as `gateway_timeout` (the mock PSPs give no decline code, so this is the router's own
+classification): it appears in Live and the agent drafts and sends a recovery message. A payment the fraud check blocks is quarantined and never
+messaged. `POST /api/route/chaos?psp=all|psp-a&down=true|false` takes mock gateways offline. The Live tab has a runner for this.
 
 **To send real emails**, set SMTP variables before starting the server (see `env.example.sh`; copy it to the git-ignored `env.sh`):
 
@@ -254,11 +280,12 @@ cp env.example.sh env.sh      # edit SMTP_HOST / SMTP_USER / SMTP_PASS
 source env.sh && FRAUD_URL=http://localhost:8100 make run
 ```
 
-Without SMTP variables every message is shown as `simulated`. Safety: type your own address in the page (or set `TEST_RECIPIENT`) so
-every message goes to you; addresses ending `@example.com` are never emailed; recovery sends are capped at 10 per minute.
-Verified with a local fake SMTP server (a real SMTP conversation, not Gmail); not tested against a real mail provider.
+Without SMTP variables every message is `simulated`. Safety: type your own address in Demo mode (or set `TEST_RECIPIENT`) so every message goes to you;
+addresses ending `@example.com` are never emailed; router-triggered recovery sends are capped at 10 per minute. The real SMTP path is tested against a local
+fake SMTP server (`scripts/fakesmtp.py`), not a real mail provider.
 
 ### Limitations
 
-Bitcoin data, not card payments; precomputed scores (a brand-new transaction cannot be scored); no graph database;
-no auth on the fraud API; thresholds tuned on the test split; the router's gateways are mocks.
+Bitcoin data, not card payments, so the graph signal is a demonstration of the pattern; payment-to-node links are explicit or demo links, never inferred;
+precomputed scores (a brand-new node cannot be scored); thresholds tuned on the test split; the GCN does not beat the baseline on ROC-AUC; no graph database;
+no auth on the fraud API; the router's gateways are mocks; no live Stripe/SMTP/Lambda deployment was exercised in testing.

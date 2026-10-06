@@ -16,7 +16,7 @@ scripts/regression.sh bin/server final              # final
 diff regression/benchmark_main.json regression/benchmark_final.json && echo "benchmark byte-identical"
 ```
 
-## A. Backend features (baseline on main: **52 PASS, 0 FAIL**)
+## A. Backend features (baseline on main: **52 PASS, 0 FAIL**; final branch: **76 PASS, 0 FAIL** incl. section D below)
 
 | Feature | Check (curl) | Expected |
 |---|---|---|
@@ -39,7 +39,9 @@ diff regression/benchmark_main.json regression/benchmark_final.json && echo "ben
 | Benchmark | `curl :PORT/benchmark` | strategies "Do nothing", "Blast everyone", "Recover (smart agent)"; the agent contacts 0 fraud; has `exceptions` and `stopping_rules`. Saved to `regression/benchmark_<label>.json`; **must be byte-identical on the branch** |
 | Real SMTP + AUTO_RECOVER + TEST_RECIPIENT | fake SMTP on :2525; `AUTO_RECOVER=true TEST_RECIPIENT=me@demo.test`; POST a failed event | mail to `me@demo.test` carrying the drafted message; hard decline (`stolen_card`) is NOT mailed; `/api/recover` with `send:true` really sends (`sent`/`email`) |
 
-## B. UI click-paths (baseline on main: **all pass except U8b**)
+## B. UI click-paths (baseline on main: **all pass except U8b**; new UI: see `regression/ui_final.txt`, **all pass, U8b fixed**)
+
+On the redesigned UI the same checks apply, with these path changes: the overview/benchmark/live/upload panels are now **tabs** (Overview, Recovery Plan, Live, Fraud Model, Benchmark, Drop-in API); "Take a tour" is in the top bar; Demo mode is a bar under the header. Element ids are unchanged.
 
 | # | Click path | Expected |
 |---|---|---|
@@ -51,11 +53,24 @@ diff regression/benchmark_main.json regression/benchmark_final.json && echo "ben
 | U6 | "Run benchmark" | 3-strategy table, exceptions line, 4 stopping rules, dataset download link |
 | U7 | (part of U5) | Demo recipient overrides each customer's contact |
 | U8 | POST a webhook event, wait 3 s | Live panel lists it with its recoverability % |
-| U8b | Live panel: "Recover these live failures" button | **FAILS ON MAIN (pre-existing bug):** `runLive` is never defined, so the button is never created |
+| U8b | Live panel: "Recover these live failures" button | **FAILS ON MAIN (pre-existing bug):** `runLive` is never defined, so the button is never created. **Fixed on this branch** (`runLive` defined; quarantined events are skipped) |
 | U9 | Drop-in card | Shows the `curl /api/recover` example |
 | U10 | "For merchants" card; "Take the tour" links | Present and working |
 
+## D. New: graph fraud signal (automated, section D of `scripts/regression.sh`; skipped on main)
+
+| Feature | Expected |
+|---|---|
+| `GET /api/graph/status` | `disabled` without `FRAUD_URL`; `ok`/online with the service; `offline` when it is killed |
+| `/analyze` with graph on | every linked row has `graph_risk` in [0,1], `fraud_signals` (list), `quarantined`, `graph_link`; summary gains `graph_status graph_review graph_quarantined quarantined_total`; ORIGINAL row and summary fields identical to main |
+| Two signals | burst rows carry a `card_testing` signal; a non-burst row can be quarantined by `graph_risk` alone; review band flags without quarantining; recoverable amount excludes every quarantined row |
+| Quarantine is honoured | `/execute` skips graph-quarantined rows (no message); `/api/recover` with a quarantining `graph_node_id` and `send:true` returns `sent:"skipped"` |
+| `/simulate`, `/live`, webhooks | simulate returns its events; failure events carry graph fields with a demo link; Stripe `metadata.graph_node_id` -> explicit link |
+| `/overview` | additive `graph_checked graph_review graph_quarantined`, series points gain `graph` |
+| Fail-open | service killed mid-run: status `offline`, `/analyze` still works, nothing quarantined, recoverable amount equals the no-graph baseline, draft and webhook still work |
+| Benchmark | `regression/benchmark_final.json` is byte-identical to `regression/benchmark_main.json` |
+
 ## C. Known pre-existing issues on main (not caused by this work)
 
-1. **U8b:** `web/index.html` sets `b.onclick=runLive` but `runLive` is not defined anywhere, so the "Recover these live failures" button never appears.
+1. **U8b:** `web/index.html` sets `b.onclick=runLive` but `runLive` is not defined anywhere, so the "Recover these live failures" button never appears. (**Fixed on `feat/recover-gnn`.**)
 2. **Docs nit:** README's example table calls the third strategy "Recover (agent)"; the API returns "Recover (smart agent)" and the numbers are 29,878 / 84.7% / 29 / 0 / 75.86%.
