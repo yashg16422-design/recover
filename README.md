@@ -232,6 +232,32 @@ make test                  # go vet + go test
 Open `http://localhost:8090/fraud.html`. Ports: Recover 8090, fraud service 8100, mock PSPs 9001-9003.
 AWS: see `fraud/DEPLOY_AWS.md` (nothing is deployed). Postman: import `fraud/postman_collection.json` plus `fraud/postman_env_local.json`.
 
+### Sample cases and the Recover agent (failed payments get emails)
+
+A payment the router cannot complete is handed to the Recover agent (`cmd/server/recovery_bridge.go`), the same
+diagnose -> score -> draft -> send loop the dashboard uses:
+
+- **All gateways failed** -> the router classes it as `gateway_timeout` (the mock PSPs give no decline code), it appears in the
+  dashboard's Live feed and counters, and the agent drafts a recovery message and sends it (real SMTP/Twilio if configured,
+  otherwise `simulated`). The response gains a `recovery` object (type, channel, status, detail, message).
+- **Fraud check BLOCKED** -> quarantined and **never messaged**; counted as a threat on the dashboard.
+- Optional request fields: `customer_name`, `customer_email`, `currency`, `demo_recipient`. Amounts are in the smallest unit (paise).
+
+On `/fraud.html`, **Run sample cases** sends 3 illicit + 7 licit test-period transactions through the router. **Kill all gateways**
+makes every payment fail so you can watch the recovery emails appear; **Restore gateways** brings them back. The same chaos
+switch is `POST /api/route/chaos?psp=all|psp-a&down=true|false`.
+
+**To send real emails**, set SMTP variables before starting the server (see `env.example.sh`; copy it to the git-ignored `env.sh`):
+
+```bash
+cp env.example.sh env.sh      # edit SMTP_HOST / SMTP_USER / SMTP_PASS
+source env.sh && FRAUD_URL=http://localhost:8100 make run
+```
+
+Without SMTP variables every message is shown as `simulated`. Safety: type your own address in the page (or set `TEST_RECIPIENT`) so
+every message goes to you; addresses ending `@example.com` are never emailed; recovery sends are capped at 10 per minute.
+Verified with a local fake SMTP server (a real SMTP conversation, not Gmail); not tested against a real mail provider.
+
 ### Limitations
 
 Bitcoin data, not card payments; precomputed scores (a brand-new transaction cannot be scored); no graph database;

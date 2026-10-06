@@ -95,6 +95,9 @@ func emailSend(to, subject, body string) (status, detail string) {
 	if host == "" || user == "" || pass == "" {
 		return "simulated", "no SMTP creds set — would email " + to
 	}
+	if strings.HasSuffix(strings.ToLower(to), "@example.com") { // demo addresses are never really emailed
+		return "simulated", "demo address (@example.com) — not sent: " + to
+	}
 	port := getenv("SMTP_PORT", "587")
 	msg := "From: " + from + "\r\nTo: " + to + "\r\nSubject: " + subject + "\r\n\r\n" + body
 	if err := smtp.SendMail(host+":"+port, smtp.PlainAuth("", user, pass, host), from, []string{to}, []byte(msg)); err != nil {

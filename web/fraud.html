@@ -49,6 +49,12 @@
   tr.hl td{background:var(--yellow);font-weight:800}
   .err{background:var(--red);border:var(--b);padding:10px 14px;font-weight:800;margin-top:14px}
   .muted{font-size:14px;margin:12px 0 0}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 0}
+  .chip{border:var(--b);padding:4px 10px;font-family:var(--mono);font-size:12px;font-weight:800;background:var(--green)}
+  .chip.open{background:var(--red)} .chip.half_open{background:var(--yellow)}
+  .b-sm{padding:2px 8px;font-size:12px;box-shadow:none;border-width:2px;display:inline-block;font-weight:900}
+  td small{display:block;font-weight:400;opacity:.85;margin-top:4px;max-width:340px}
+  .tally{font-family:var(--mono);font-weight:800;margin-top:12px}
   .hidden{display:none}
 </style>
 </head>
@@ -91,15 +97,33 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="h-sim">
+    <h2 id="h-sim">2. Run sample cases</h2>
+    <p class="muted" style="margin-top:0">Sends a mix of 3 illicit and 7 licit test-period transactions through the router, one after another. If every gateway fails, the Recover agent drafts and sends a recovery email. If the fraud check blocks a payment, it is quarantined and nobody is messaged.</p>
+    <div class="row" style="margin-top:12px">
+      <button id="bRun">Run 10 sample payments</button>
+      <button class="b-red" id="bKill">Kill all gateways</button>
+      <button class="b-green" id="bRestore">Restore gateways</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input id="inbox" type="email" placeholder="your email (optional)" aria-label="send recovery emails to" style="width:min(320px,100%)">
+    </div>
+    <p class="muted">Recovery emails go to this address if you fill it in. They are really sent only if the server has SMTP_* set; otherwise they are shown as "simulated". Sample customers are made up (@example.com is never emailed). Gateways are mock PSPs.</p>
+    <div class="chips" id="gw"></div>
+    <p class="muted" id="chaosState"></p>
+    <div class="scroll"><table id="simTable" class="hidden"><thead><tr><th>Node</th><th>Amount</th><th>Risk</th><th>Fraud check</th><th>Payment</th><th>Recover agent</th></tr></thead><tbody></tbody></table></div>
+    <div class="tally" id="tally"></div>
+  </section>
+
   <section class="card" aria-labelledby="h-graph">
-    <h2 id="h-graph">2. Neighbourhood (1&ndash;2 hops)</h2>
+    <h2 id="h-graph">3. Neighbourhood (1&ndash;2 hops)</h2>
     <svg id="graph" viewBox="0 0 400 320" role="img" aria-label="Neighbourhood graph of the scored node"></svg>
     <div class="legend" id="legend"></div>
     <p class="muted" id="graphNote">Score a transaction to draw its neighbours. A model with 2 layers sees exactly this: neighbours and neighbours of neighbours.</p>
   </section>
 
   <section class="card" aria-labelledby="h-report">
-    <h2 id="h-report">3. Model report card</h2>
+    <h2 id="h-report">4. Model report card</h2>
     <div class="scroll"><table id="report"><thead><tr><th>Model</th><th>Features</th><th>ROC-AUC</th><th>PR-AUC</th><th>F1 (illicit)</th></tr></thead><tbody></tbody></table></div>
     <p class="muted"><b>ROC-AUC</b> says how well the model ranks a bad transaction above a good one (0.5 = coin flip, 1.0 = perfect). It is not accuracy.</p>
     <p class="muted" id="reportMeta"></p>
@@ -230,11 +254,66 @@ $("bLic").onclick=()=>pick("licit");
 $("bGo").onclick=()=>{ const v=$("nodeId").value.trim(); if(!/^\d+$/.test(v)) return fail("Enter a node id (a whole number)."); score(parseInt(v,10)); };
 $("nodeId").addEventListener("keydown",e=>{ if(e.key==="Enter") $("bGo").click(); });
 
+const NAMES=["Aarav","Diya","Kabir","Meera","Rohan","Ananya","Vivaan","Isha","Arjun","Saanvi","Tara","Dev"];
+const rnd=n=>Math.floor(Math.random()*n);
+async function refreshGateways(){
+  try{
+    const st=await getJSON("/api/route/stats"); const box=$("gw"); box.replaceChildren();
+    st.psps.forEach(p=>{ const c=document.createElement("span"); c.className="chip "+p.breaker;
+      c.textContent=p.name+" | breaker "+p.breaker+" | success EWMA "+p.ewma_success; box.appendChild(c); });
+  }catch(e){}
+}
+async function chaos(down){
+  try{
+    const r=await fetch("/api/route/chaos?psp=all&down="+down,{method:"POST"}); if(!r.ok) throw new Error("HTTP "+r.status);
+    $("chaosState").textContent = down ? "All gateways are OFFLINE. Payments will fail and go to the Recover agent." : "Gateways restored. The router's breakers close again after a successful payment.";
+    refreshGateways();
+  }catch(e){ fail("Could not reach the mock gateways: "+e.message+". Is `make psps` running?"); }
+}
+function cell(tr, text, cls){ const td=document.createElement("td"); td.textContent=text; if(cls) td.className=cls; tr.appendChild(td); return td; }
+async function runSamples(){
+  show($("err"),false);
+  if(!cfg.fraud_enabled) return fail("FRAUD_URL is not set on the router, so there is nothing to run.");
+  const btn=$("bRun"); btn.disabled=true;
+  const tb=document.querySelector("#simTable tbody"); tb.replaceChildren(); show($("simTable"),true);
+  const t={ROUTED:0,REVIEW:0,BLOCKED:0,paid:0,failed:0,email:0,quarantined:0,other:0};
+  const kinds=[0,1,2,3,4,5,6,7,8,9].map(i=>i<3?"illicit":"licit").sort(()=>Math.random()-.5);
+  try{
+    for(const kind of kinds){
+      const s=await getJSON("/api/fraud/sample?kind="+kind);
+      const name=NAMES[rnd(NAMES.length)];
+      const body={amount:(rnd(491)+10)*1000, fraud_node_id:s.node_id, customer_name:name,
+                  customer_email:name.toLowerCase()+"@example.com", currency:"INR"};
+      const to=$("inbox").value.trim(); if(to) body.demo_recipient=to;
+      const j=await (await fetch("/api/route",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+      const tr=document.createElement("tr");
+      cell(tr, s.node_id+" ("+kind+")");
+      cell(tr, "INR "+(body.amount/100));
+      cell(tr, j.fraud_risk!=null ? j.fraud_risk.toFixed(3) : "n/a");
+      const d=cell(tr, j.fraud_decision); d.classList.add(j.fraud_decision); d.style.fontWeight="900";
+      cell(tr, j.status==="success" ? "success via "+j.psp : j.status==="blocked" ? "blocked, no gateway tried" : "FAILED after "+j.attempts+" tries ("+(j.tried||[]).join(", ")+")");
+      const rc=cell(tr, "-");
+      if(j.recovery){
+        const a=j.recovery; rc.textContent=a.type+" / "+a.channel+": "+a.status;
+        const sm=document.createElement("small"); sm.textContent=a.detail+(a.message?"  \u201c"+a.message+"\u201d":""); rc.appendChild(sm);
+        if(a.status==="skipped"&&j.status==="blocked") t.quarantined++; else if(a.status==="sent"||a.status==="simulated") t.email++; else t.other++;
+      }
+      tb.appendChild(tr);
+      t[j.fraud_decision]++; if(j.status==="success") t.paid++; else if(j.status!=="blocked") t.failed++;
+      $("tally").textContent="ROUTED "+t.ROUTED+" | REVIEW "+t.REVIEW+" | BLOCKED "+t.BLOCKED+" | paid "+t.paid+" | gateways failed "+t.failed+" | recovery messages "+t.email+" | quarantined "+t.quarantined+(t.other?" | other "+t.other:"");
+    }
+  }catch(e){ fail("Sample run stopped: "+e.message); }
+  btn.disabled=false; refreshGateways();
+}
+$("bRun").onclick=runSamples;
+$("bKill").onclick=()=>chaos(true);
+$("bRestore").onclick=()=>chaos(false);
+
 $("ports").textContent = "router :"+(location.port||"80")+" | fraud service via /api/fraud";
 (async()=>{
   try{ cfg = await getJSON("/api/route/config"); }catch(e){}
   if(!cfg.fraud_enabled) fail("FRAUD_URL is not set on the router, so fraud checks are off. Start the server with FRAUD_URL=http://localhost:8100.");
-  loadReport();
+  loadReport(); refreshGateways();
 })();
 </script>
 </body>

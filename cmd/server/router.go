@@ -254,6 +254,12 @@ type payRequest struct {
 	Amount         float64 `json:"amount"`
 	IdempotencyKey string  `json:"idempotency_key"`
 	FraudNodeID    *int    `json:"fraud_node_id,omitempty"` // optional: which graph node to risk-score
+
+	// optional customer context so a failed payment can be handed to the recovery agent
+	CustomerName  string `json:"customer_name,omitempty"`
+	CustomerEmail string `json:"customer_email,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	DemoRecipient string `json:"demo_recipient,omitempty"` // send recovery messages here instead (demo mode)
 }
 
 type payResult struct {
@@ -350,10 +356,11 @@ func (r *Router) route(policy string, pr payRequest) payResult {
 // routeResponse = the router's result + the fraud decision (additive fields).
 type routeResponse struct {
 	payResult
-	FraudCheck     string   `json:"fraud_check"`               // "ok" | "unavailable" | "skipped"
-	FraudDecision  string   `json:"fraud_decision"`            // ROUTED | REVIEW | BLOCKED
-	FraudRisk      *float64 `json:"fraud_risk,omitempty"`      // 0..1, graph model's P(illicit)
+	FraudCheck     string   `json:"fraud_check"`                // "ok" | "unavailable" | "skipped"
+	FraudDecision  string   `json:"fraud_decision"`             // ROUTED | REVIEW | BLOCKED
+	FraudRisk      *float64 `json:"fraud_risk,omitempty"`       // 0..1, graph model's P(illicit)
 	FraudLatencyMS *int64   `json:"fraud_latency_ms,omitempty"` // round trip to the fraud service
+	Recovery       *action  `json:"recovery,omitempty"`         // what the Recover agent did about a failed/blocked payment
 }
 
 func (r *Router) handleRoute(fc *fraudClient) http.HandlerFunc {
@@ -368,6 +375,9 @@ func (r *Router) handleRoute(fc *fraudClient) http.HandlerFunc {
 			return
 		}
 
+		if pr.IdempotencyKey == "" { // also used as the charge id if the recovery agent is called
+			pr.IdempotencyKey = fmt.Sprintf("idem-%d-%d", time.Now().UnixNano(), rand.Int63())
+		}
 		out := routeResponse{FraudCheck: "skipped", FraudDecision: decisionRouted}
 		if fc != nil && pr.FraudNodeID != nil {
 			fr := fc.check(*pr.FraudNodeID)
@@ -386,16 +396,46 @@ func (r *Router) handleRoute(fc *fraudClient) http.HandlerFunc {
 			// blocked before any gateway is touched
 			out.payResult = payResult{Status: "blocked", Tried: []string{}, Policy: policy}
 			status = http.StatusForbidden
+			out.Recovery = recoverFromRouter(pr, true) // quarantined, never messaged
 		} else {
 			out.payResult = r.route(policy, pr)
 			if out.Status != "success" {
 				status = http.StatusBadGateway
+				out.Recovery = recoverFromRouter(pr, false) // the Recover agent takes over
+			} else {
+				recordSuccesses(1)
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(out)
 	}
+}
+
+// handleChaos takes mock gateways offline/online so failover and recovery can be demoed:
+// POST /api/route/chaos?psp=psp-a|all&down=true|false (forwards to the PSP's admin API).
+func (r *Router) handleChaos(w http.ResponseWriter, req *http.Request) {
+	name := req.URL.Query().Get("psp")
+	action := "up"
+	if req.URL.Query().Get("down") == "true" {
+		action = "down"
+	}
+	hit := 0
+	for _, b := range r.backends {
+		if name != "all" && b.Name != name {
+			continue
+		}
+		hit++
+		hr, _ := http.NewRequest(http.MethodPost, b.URL+"/admin/"+action, nil)
+		if resp, err := r.client.Do(hr); err == nil {
+			resp.Body.Close()
+		}
+	}
+	if hit == 0 {
+		http.Error(w, "unknown psp", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"psp": name, "action": action, "gateways": hit})
 }
 
 func (r *Router) handleStats(w http.ResponseWriter, _ *http.Request) {
@@ -464,6 +504,7 @@ func registerRouting(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/route", rt.handleRoute(fc))
 	mux.HandleFunc("GET /api/route/stats", rt.handleStats)
+	mux.HandleFunc("POST /api/route/chaos", rt.handleChaos)
 	mux.HandleFunc("GET /api/route/config", func(w http.ResponseWriter, _ *http.Request) {
 		if fc == nil {
 			writeJSON(w, map[string]any{"fraud_enabled": false})
