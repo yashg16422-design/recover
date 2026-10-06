@@ -233,6 +233,7 @@ func main() {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
+	registerRouting(mux) // SmartRoute router + graph fraud check (router.go, fraudclient.go)
 	mux.Handle("GET /", http.FileServer(http.Dir("web")))
 
 	// withRecovery: one bad request can never crash the server.

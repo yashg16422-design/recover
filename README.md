@@ -164,3 +164,75 @@ personalized outreach, card-testing quarantine, and a merchant-owned audit trail
 
 - Real card re-charge via gateway APIs (needs live credentials + stored mandates).
 - Opt-out/compliance, auth & multi-tenancy for production scale.
+
+## Graph fraud detection (SmartRoute router + GNN)
+
+The Go server now contains the **SmartRoute router** (EWMA gateway health, circuit breaker, failover under one
+idempotency key; ported from the SmartRoute project into `cmd/server/router.go`) and asks a **graph fraud service** for a risk
+score *before* choosing a gateway. Gateways are the mock PSPs in `cmd/psp` (simulated, not real acquirers).
+
+**Honest labeling:** the model is trained on the **Elliptic Bitcoin transaction graph**, not card payments. The
+integration demonstrates the architecture pattern (router consults a graph fraud service), not a claim that the model
+works on card data. Scores are **precomputed** per node (a lookup, not live inference), and there is no Neo4j.
+
+### How it fits together
+
+```
+POST /api/route {"amount":499,"fraud_node_id":123}
+   -> fraud service GET /score/123  (FRAUD_URL, 300 ms timeout, FAIL-OPEN)
+   -> risk >= 0.8 BLOCKED (no gateway touched) | >= 0.5 REVIEW (routed, flagged) | else ROUTED
+   -> SmartRoute picks a gateway (EWMA + breaker + failover)
+response: the existing fields (status, psp, attempts, tried, policy) + fraud_check, fraud_decision, fraud_risk, fraud_latency_ms
+```
+
+`fraud_node_id` is optional. Without it, routing behaves as before (`fraud_check: "skipped"`).
+**Fail-open:** if the fraud service is down, slow or returns bad data, the payment is routed anyway and the response says
+`fraud_check: "unavailable"` (tested in `cmd/server/fraudclient_test.go`).
+
+### Measured results
+
+All numbers come from `fraud/artifacts/results.json` (written by `train.py` and `bench.py`). Test = the dataset's own time
+split, time steps 35-49 (16670 labeled, 1083 illicit); train = steps 1-34 (29894 labeled).
+Graph: 203769 nodes, 234355 edges. GCN = mean ± std over 5 seeds, CPU, 200 epochs;
+logistic regression has no randomness. F1 is for the illicit class at threshold 0.5.
+
+| Model | Features | ROC-AUC | PR-AUC | F1 (illicit) |
+|---|---|---|---|---|
+| Logistic regression (no graph) | 165 | 0.882 | 0.292 | 0.305 |
+| GCN, 2 layers | 165 | 0.887 ± 0.004 | 0.543 ± 0.019 | 0.493 ± 0.026 |
+| Logistic regression (no graph) | 93 local | 0.866 | 0.254 | 0.243 |
+| GCN, 2 layers | 93 local | 0.856 ± 0.002 | 0.438 ± 0.015 | 0.240 ± 0.006 |
+
+**Reading it honestly:** on ROC-AUC (ranking) the GCN and the baseline are about tied with all 165 features, and the baseline is
+slightly *ahead* with the 93 local features. The graph's clear gain is **PR-AUC** (precision among the top-ranked), and the
+GCN's illicit F1 at 0.5 is higher because logistic regression flags far too many transactions. 72 of the 165 features are
+already neighbour aggregates, so `logreg 165` has some graph information; the 93-feature rows are the cleaner graph-vs-no-graph test.
+
+**Thresholds** (from the GCN threshold table; chosen on the test split, so these numbers are optimistic): block at **0.8**
+(precision 0.783, recall 0.357, 494 flagged) because wrongly blocking a customer is costly;
+review at **0.5** (precision 0.477, recall 0.607). Override with `FRAUD_BLOCK_AT` / `FRAUD_REVIEW_AT`.
+In practice most illicit transactions are *not* blocked at 0.8; the UI shows those misses instead of hiding them.
+
+**Serving latency** (local, uvicorn, 1000 sequential requests, no network, **not Lambda**): p50 0.46 ms,
+p95 0.58 ms (1-hop); p50 0.49 ms, p95 0.64 ms (2-hop).
+Lambda package (built locally, not deployed): 80.9 MB unzipped, 25.1 MB zipped. Cold vs warm Lambda latency: **not measured** (needs a real deployment).
+
+### Run it
+
+```bash
+make fraud-venv            # one-time: creates fraud/.venv (training) and fraud/.venv-serve (serving, no torch)
+make fraud-train           # offline; downloads Elliptic (~150 MB); writes fraud/artifacts/* (about 6 minutes on CPU)
+make fraud-serve           # fraud service on :8100
+make psps                  # mock gateways on :9001-:9003 (second terminal)
+FRAUD_URL=http://localhost:8100 make run     # Recover + router on :8090 (third terminal)
+make fraud-bench           # latency benchmark (starts its own copy of the service on :8101)
+make test                  # go vet + go test
+```
+
+Open `http://localhost:8090/fraud.html`. Ports: Recover 8090, fraud service 8100, mock PSPs 9001-9003.
+AWS: see `fraud/DEPLOY_AWS.md` (nothing is deployed). Postman: import `fraud/postman_collection.json` plus `fraud/postman_env_local.json`.
+
+### Limitations
+
+Bitcoin data, not card payments; precomputed scores (a brand-new transaction cannot be scored); no graph database;
+no auth on the fraud API; thresholds tuned on the test split; the router's gateways are mocks.

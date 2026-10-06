@@ -1,0 +1,184 @@
+{
+  "info": {
+    "name": "Graph fraud service + SmartRoute",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Elliptic Bitcoin graph fraud scores (not card data). Pick the 'local' or 'aws' environment, then run the collection in order."
+  },
+  "variable": [
+    {
+      "key": "node_id",
+      "value": "0"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health"
+        },
+        "description": "First call after a Lambda idle period is a cold start; run it twice to see cold vs warm."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"status ok\", () => pm.expect(pm.response.json().status).to.eql(\"ok\"));",
+              "pm.test(\"artifacts loaded\", () => pm.expect(pm.response.json().nodes).to.be.above(0));",
+              "const bound = parseInt(pm.variables.get(\"latency_bound_ms\") || \"5000\", 10);",
+              "pm.test(\"latency under sanity bound (\" + bound + \" ms; not an SLO)\", () => pm.expect(pm.response.responseTime).to.be.below(bound));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Random illicit node (test split)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sample?kind=illicit"
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test(\"returns a node id\", () => pm.expect(j.node_id).to.be.a(\"number\"));",
+              "pm.collectionVariables.set(\"node_id\", j.node_id);",
+              "const bound = parseInt(pm.variables.get(\"latency_bound_ms\") || \"5000\", 10);",
+              "pm.test(\"latency under sanity bound (\" + bound + \" ms; not an SLO)\", () => pm.expect(pm.response.responseTime).to.be.below(bound));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Score node (2 hops)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/score/{{node_id}}?hops=2"
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test(\"0 <= risk <= 1\", () => { pm.expect(j.risk).to.be.within(0, 1); });",
+              "pm.test(\"0 <= baseline_risk <= 1\", () => { pm.expect(j.baseline_risk).to.be.within(0, 1); });",
+              "pm.test(\"top_neighbors is an array\", () => pm.expect(j.top_neighbors).to.be.an(\"array\"));",
+              "pm.test(\"test-split node is out-of-sample\", () => pm.expect(j.in_sample).to.eql(false));",
+              "const bound = parseInt(pm.variables.get(\"latency_bound_ms\") || \"5000\", 10);",
+              "pm.test(\"latency under sanity bound (\" + bound + \" ms; not an SLO)\", () => pm.expect(pm.response.responseTime).to.be.below(bound));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Unknown node -> 404",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/score/99999999"
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+              "const bound = parseInt(pm.variables.get(\"latency_bound_ms\") || \"5000\", 10);",
+              "pm.test(\"latency under sanity bound (\" + bound + \" ms; not an SLO)\", () => pm.expect(pm.response.responseTime).to.be.below(bound));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Model metrics",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/metrics"
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test(\"has GCN and baseline\", () => { pm.expect(j.models).to.have.property(\"gcn_all165\"); pm.expect(j.models).to.have.property(\"logreg_all165\"); });",
+              "pm.test(\"dataset is labeled Bitcoin\", () => pm.expect(j.dataset.name).to.include(\"Bitcoin\"));",
+              "const bound = parseInt(pm.variables.get(\"latency_bound_ms\") || \"5000\", 10);",
+              "pm.test(\"latency under sanity bound (\" + bound + \" ms; not an SLO)\", () => pm.expect(pm.response.responseTime).to.be.below(bound));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Router: route a payment (shows fraud_risk)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{router_url}}/api/route"
+        },
+        "description": "Hits the Recover server (SmartRoute router). Start it with FRAUD_URL set to the same service as base_url. Run request 2 first so node_id is set.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 499,\n  \"fraud_node_id\": {{node_id}}\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 routed/review, 403 blocked, or 502 if mock gateways are not running\", () => pm.expect([200, 403, 502]).to.include(pm.response.code));",
+              "const j = pm.response.json();",
+              "pm.test(\"fraud_decision present\", () => pm.expect([\"ROUTED\", \"REVIEW\", \"BLOCKED\"]).to.include(j.fraud_decision));",
+              "pm.test(\"fraud check reached the service (fail-open would say unavailable)\", () => pm.expect(j.fraud_check).to.eql(\"ok\"));",
+              "pm.test(\"0 <= fraud_risk <= 1\", () => pm.expect(j.fraud_risk).to.be.within(0, 1));",
+              "pm.test(\"existing fields still present\", () => { pm.expect(j).to.have.property(\"status\"); pm.expect(j).to.have.property(\"attempts\"); pm.expect(j).to.have.property(\"policy\"); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

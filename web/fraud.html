@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fraud Graph</title>
+<style>
+  :root{
+    --bg:#f4f1e8; --ink:#000; --card:#fff;
+    --red:#ff4d4d; --green:#3ddc84; --yellow:#ffd23f;
+    --b:3px solid var(--ink); --sh:6px 6px 0 var(--ink);
+    --sans:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.4;padding:16px}
+  main{max-width:960px;margin:0 auto}
+  h1{font-size:clamp(34px,8vw,64px);line-height:.95;margin:0 0 8px;text-transform:uppercase;letter-spacing:-1px;font-weight:900}
+  h2{font-size:20px;margin:0 0 12px;text-transform:uppercase;font-weight:900;letter-spacing:.5px}
+  a{color:var(--ink);font-weight:700}
+  .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-family:var(--mono);font-size:13px;font-weight:700}
+  .note{background:var(--yellow);border:var(--b);box-shadow:var(--sh);padding:10px 14px;font-weight:700;margin:14px 0 22px}
+  .card{background:var(--card);border:var(--b);box-shadow:var(--sh);padding:16px;margin-bottom:24px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+  button,input{font:inherit;font-weight:800;border:var(--b);border-radius:0;padding:10px 14px;background:var(--card);color:var(--ink)}
+  input{font-family:var(--mono);width:140px;box-shadow:inset 3px 3px 0 #0002}
+  button{cursor:pointer;box-shadow:4px 4px 0 var(--ink);text-transform:uppercase;transition:none}
+  button:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--ink)}
+  button:focus-visible,input:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+  .b-red{background:var(--red)} .b-green{background:var(--green)}
+  .result{display:grid;grid-template-columns:1fr;gap:16px;margin-top:16px}
+  @media(min-width:700px){.result{grid-template-columns:1fr 1fr}}
+  .big{font-family:var(--mono);font-size:clamp(56px,14vw,96px);font-weight:900;line-height:1}
+  .bar{height:28px;border:var(--b);background:#fff;position:relative;margin:10px 0}
+  .bar>i{display:block;height:100%;background:var(--ink)}
+  .bar>b{position:absolute;top:-6px;bottom:-6px;width:3px;background:var(--ink)}
+  .tick{font-family:var(--mono);font-size:12px;font-weight:700;display:flex;justify-content:space-between}
+  .badge{display:inline-block;border:var(--b);box-shadow:4px 4px 0 var(--ink);padding:6px 14px;font-size:28px;font-weight:900;text-transform:uppercase}
+  .ROUTED{background:var(--green)} .REVIEW{background:var(--yellow)} .BLOCKED{background:var(--red)}
+  dl{margin:14px 0 0;display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-family:var(--mono);font-size:14px}
+  dt{font-weight:800} dd{margin:0}
+  svg{width:100%;height:auto;max-height:420px;display:block;background:#fff;border:var(--b)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-family:var(--mono);font-size:13px;font-weight:700;margin-top:10px}
+  .sw{display:inline-block;width:14px;height:14px;border:3px solid var(--ink);vertical-align:-2px;margin-right:6px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:14px;min-width:560px}
+  th,td{border:var(--b);padding:8px 10px;text-align:left}
+  th{background:var(--ink);color:#fff;text-transform:uppercase;font-size:12px}
+  tr.hl td{background:var(--yellow);font-weight:800}
+  .err{background:var(--red);border:var(--b);padding:10px 14px;font-weight:800;margin-top:14px}
+  .muted{font-size:14px;margin:12px 0 0}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><a href="/">&larr; Recover dashboard</a><span id="ports"></span></div>
+  <h1>Fraud<br>Graph</h1>
+  <div class="note">Trained on the Elliptic Bitcoin transaction graph, not card payments. This page is a demo of the routing pattern: the router asks a graph fraud service for a risk score before it picks a gateway.</div>
+
+  <section class="card" aria-labelledby="h-score">
+    <h2 id="h-score">1. Score a transaction</h2>
+    <div class="row">
+      <button class="b-red" id="bIll">Random illicit</button>
+      <button class="b-green" id="bLic">Random licit</button>
+      <input id="nodeId" inputmode="numeric" placeholder="node id" aria-label="node id">
+      <button id="bGo">Score</button>
+    </div>
+    <p class="muted">Random picks come from the test period only (time steps 35&ndash;49), so the model never saw them in training.</p>
+    <div id="err" class="err hidden" role="alert"></div>
+    <div id="result" class="result hidden">
+      <div>
+        <div class="tick"><span>RISK (P illicit)</span><span id="splitTag"></span></div>
+        <div class="big" id="risk">-</div>
+        <div class="bar" id="bar"><i id="barFill"></i><b id="tReview"></b><b id="tBlock"></b></div>
+        <div class="tick"><span>0</span><span id="tLabels"></span><span>1</span></div>
+      </div>
+      <div>
+        <div class="tick"><span>ROUTER DECISION</span></div>
+        <div id="decision" class="badge">-</div>
+        <dl>
+          <dt>node</dt><dd id="rNode"></dd>
+          <dt>known label</dt><dd id="rLabel"></dd>
+          <dt>payment</dt><dd id="rPay"></dd>
+          <dt>fraud lookup</dt><dd id="rSvc"></dd>
+          <dt>round trip</dt><dd id="rRtt"></dd>
+          <dt>baseline risk</dt><dd id="rBase"></dd>
+        </dl>
+        <p class="muted" id="rNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="h-graph">
+    <h2 id="h-graph">2. Neighbourhood (1&ndash;2 hops)</h2>
+    <svg id="graph" viewBox="0 0 400 320" role="img" aria-label="Neighbourhood graph of the scored node"></svg>
+    <div class="legend" id="legend"></div>
+    <p class="muted" id="graphNote">Score a transaction to draw its neighbours. A model with 2 layers sees exactly this: neighbours and neighbours of neighbours.</p>
+  </section>
+
+  <section class="card" aria-labelledby="h-report">
+    <h2 id="h-report">3. Model report card</h2>
+    <div class="scroll"><table id="report"><thead><tr><th>Model</th><th>Features</th><th>ROC-AUC</th><th>PR-AUC</th><th>F1 (illicit)</th></tr></thead><tbody></tbody></table></div>
+    <p class="muted"><b>ROC-AUC</b> says how well the model ranks a bad transaction above a good one (0.5 = coin flip, 1.0 = perfect). It is not accuracy.</p>
+    <p class="muted" id="reportMeta"></p>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let cfg = {fraud_enabled:false};
+
+function show(el, on){ el.classList.toggle("hidden", !on); }
+function fail(msg){ const e=$("err"); e.textContent=msg; show(e,true); show($("result"),false); }
+async function getJSON(url){
+  const r = await fetch(url); if(!r.ok) throw new Error(url+" -> HTTP "+r.status);
+  return r.json();
+}
+function band(risk){
+  if(!cfg.fraud_enabled) return "ROUTED";
+  return risk>=cfg.block_at ? "BLOCKED" : risk>=cfg.review_at ? "REVIEW" : "ROUTED";
+}
+const COLOR = {ROUTED:"var(--green)", REVIEW:"var(--yellow)", BLOCKED:"var(--red)"};
+
+async function score(id){
+  show($("err"),false);
+  const t0 = performance.now();
+  let route, detail;
+  try{
+    // the router does the real work: fraud check first, then gateway routing
+    const rr = await fetch("/api/route",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({amount:499, fraud_node_id:id})});
+    route = await rr.json();
+    detail = await getJSON("/api/fraud/score/"+id+"?hops=2");
+  }catch(e){ return fail("Could not score node "+id+": "+e.message+". Is the fraud service running (make fraud-serve) and FRAUD_URL set?"); }
+  const rtt = performance.now()-t0;
+
+  $("rNode").textContent = id;
+  $("rLabel").textContent = (detail.label_if_known||"unknown")+" ("+detail.split+(detail.in_sample?", in-sample":"")+")";
+  $("risk").textContent = route.fraud_risk!=null ? route.fraud_risk.toFixed(3) : "n/a";
+  const r = route.fraud_risk||0;
+  $("barFill").style.width = (r*100)+"%";
+  $("barFill").style.background = COLOR[route.fraud_decision]||"var(--ink)";
+  $("tReview").style.left = (cfg.review_at*100)+"%"; $("tBlock").style.left = (cfg.block_at*100)+"%";
+  $("tLabels").textContent = "review "+cfg.review_at+" | block "+cfg.block_at;
+  $("splitTag").textContent = detail.split.toUpperCase();
+  const d=$("decision"); d.textContent=route.fraud_decision; d.className="badge "+route.fraud_decision;
+  $("rPay").textContent = route.status+(route.psp?" via "+route.psp:"")+" (demo amount 499; mock gateways)";
+  $("rSvc").textContent = route.fraud_check==="ok" ? route.fraud_latency_ms+" ms (router to fraud service)" : "unavailable, failed open";
+  $("rRtt").textContent = rtt.toFixed(0)+" ms (this browser, 3 calls)";
+  $("rBase").textContent = detail.baseline_risk.toFixed(3)+" (logistic regression, no graph)";
+  const known=detail.label_if_known, dec=route.fraud_decision;
+  $("rNote").textContent = route.fraud_check!=="ok" ? "Fraud service did not answer, so the router failed open and routed the payment anyway."
+    : known==="illicit" && dec==="ROUTED" ? "Known illicit, but the model scored it low: a miss. At the block threshold the model catches only part of the illicit transactions; see the report card."
+    : known==="licit" && dec!=="ROUTED" ? "Known licit, but the model flagged it: a false alarm."
+    : "";
+  show($("result"),true);
+  drawGraph(detail);
+}
+
+function svgEl(tag, attrs, text){
+  const e=document.createElementNS("http://www.w3.org/2000/svg",tag);
+  for(const k in attrs) e.setAttribute(k,attrs[k]);
+  if(text!=null) e.textContent=text;
+  return e;
+}
+function drawGraph(d){
+  const g=$("graph"); g.replaceChildren();
+  const cx=200, cy=160, nodes=[], pos={};
+  pos[d.node_id]=[cx,cy];
+  const h1=d.top_neighbors.filter(n=>n.hop===1), h2=d.top_neighbors.filter(n=>n.hop===2);
+  h1.forEach((n,i)=>{ const a=2*Math.PI*i/Math.max(h1.length,1)-Math.PI/2; n.a=a; pos[n.node_id]=[cx+95*Math.cos(a),cy+95*Math.sin(a)]; });
+  const kids={}; h2.forEach(n=>{ (kids[n.via]=kids[n.via]||[]).push(n); });
+  h2.forEach(n=>{
+    const p=h1.find(x=>x.node_id===n.via); const sib=kids[n.via]; const k=sib.indexOf(n);
+    const a=(p?p.a:0)+(k-(sib.length-1)/2)*0.28;
+    pos[n.node_id]=[cx+148*Math.cos(a),cy+148*Math.sin(a)];
+  });
+  // edges first so nodes sit on top
+  d.top_neighbors.forEach(n=>{ const a=pos[n.via], b=pos[n.node_id];
+    g.appendChild(svgEl("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:"#000","stroke-width":n.hop===1?3:2,"stroke-dasharray":n.hop===1?"":"5 4"})); });
+  const all=[{node_id:d.node_id,risk:d.risk,label:d.label_if_known,hop:0}].concat(d.top_neighbors);
+  all.forEach(n=>{
+    const [x,y]=pos[n.node_id]; const r=n.hop===0?22:n.hop===1?16:12;
+    const c=svgEl("circle",{cx:x,cy:y,r:r,fill:COLOR[band(n.risk)],stroke:"#000","stroke-width":3});
+    c.appendChild(svgEl("title",{},"node "+n.node_id+" | risk "+n.risk.toFixed(3)+" | known label: "+(n.label||"unknown")));
+    g.appendChild(c);
+    g.appendChild(svgEl("text",{x:x,y:y+4,"text-anchor":"middle","font-family":"ui-monospace,Menlo,monospace","font-size":n.hop===2?9:11,"font-weight":800},n.risk.toFixed(2)));
+    const tag=n.label==="illicit"?"ILL":n.label==="licit"?"LIC":"?";
+    g.appendChild(svgEl("text",{x:x,y:y+r+12,"text-anchor":"middle","font-family":"ui-monospace,Menlo,monospace","font-size":9,"font-weight":800},tag));
+  });
+  const lg=$("legend"); lg.replaceChildren();
+  [["ROUTED","risk below review"],["REVIEW","review band"],["BLOCKED","block band"]].forEach(([k,t])=>{
+    const s=document.createElement("span"); const sw=document.createElement("span"); sw.className="sw"; sw.style.background=COLOR[k];
+    s.append(sw,t); lg.appendChild(s); });
+  const s=document.createElement("span"); s.textContent="solid edge = 1 hop, dashed = 2 hops; ILL/LIC = known label, ? = unlabeled"; lg.appendChild(s);
+  $("graphNote").textContent = "Node "+d.node_id+" has "+d.degree+" neighbours; showing its riskiest "+h1.length+" and, for the top 3 of those, up to 2 further hops each.";
+}
+
+function fmt(m){ return m.toFixed(3); }
+function fmtMS(s){ return fmt(s.mean)+" ± "+fmt(s.std); }
+async function loadReport(){
+  let m;
+  try{ m = await getJSON("/api/fraud/metrics"); }
+  catch(e){ $("reportMeta").textContent="Metrics unavailable: fraud service not reachable."; return; }
+  const rows=[["Logistic regression (no graph)","165","logreg_all165"],["GCN, 2 layers","165","gcn_all165"],
+              ["Logistic regression (no graph)","93 local","logreg_local93"],["GCN, 2 layers","93 local","gcn_local93"]];
+  const tb=document.querySelector("#report tbody");
+  rows.forEach(([name,feat,key])=>{
+    const mod=m.models[key]; const tr=document.createElement("tr"); if(key==="gcn_all165") tr.className="hl";
+    const cells = mod.summary
+      ? [fmtMS(mod.summary.roc_auc),fmtMS(mod.summary.pr_auc),fmtMS(mod.summary.f1_illicit)]
+      : [fmt(mod.test.roc_auc),fmt(mod.test.pr_auc),fmt(mod.test.f1_illicit)];
+    [name,feat,...cells].forEach(t=>{ const td=document.createElement("td"); td.textContent=t; tr.appendChild(td); });
+    tb.appendChild(tr);
+  });
+  const d=m.dataset, c=m.config, lat=m.serving_latency;
+  $("reportMeta").textContent = "Test = time steps 35-49 ("+d.test_labeled+" labeled, "+d.test_illicit+" illicit). Train = steps 1-34 ("+d.train_labeled+" labeled). "
+    +d.nodes+" nodes, "+d.edges_undirected+" undirected edges. GCN = mean ± std over "+c.seeds.length+" seeds; logistic regression is deterministic. F1 at threshold "+c.f1_threshold+"."
+    +(lat?" Lookup latency on localhost: p50 "+lat.score_1hop.p50_ms.toFixed(1)+" ms, p95 "+lat.score_1hop.p95_ms.toFixed(1)+" ms.":"");
+}
+
+async function pick(kind){
+  try{ const s=await getJSON("/api/fraud/sample?kind="+kind); $("nodeId").value=s.node_id; await score(s.node_id); }
+  catch(e){ fail("Could not fetch a sample: "+e.message); }
+}
+$("bIll").onclick=()=>pick("illicit");
+$("bLic").onclick=()=>pick("licit");
+$("bGo").onclick=()=>{ const v=$("nodeId").value.trim(); if(!/^\d+$/.test(v)) return fail("Enter a node id (a whole number)."); score(parseInt(v,10)); };
+$("nodeId").addEventListener("keydown",e=>{ if(e.key==="Enter") $("bGo").click(); });
+
+$("ports").textContent = "router :"+(location.port||"80")+" | fraud service via /api/fraud";
+(async()=>{
+  try{ cfg = await getJSON("/api/route/config"); }catch(e){}
+  if(!cfg.fraud_enabled) fail("FRAUD_URL is not set on the router, so fraud checks are off. Start the server with FRAUD_URL=http://localhost:8100.");
+  loadReport();
+})();
+</script>
+</body>
+</html>
