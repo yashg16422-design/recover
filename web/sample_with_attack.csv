@@ -1,0 +1,16 @@
+charge_id,created_at,amount,currency,payment_method,failure_code,customer_email,customer_name
+ch_ok1,2026-08-10T09:00:00Z,49900,INR,card,insufficient_funds,aarav@example.com,Aarav Sharma
+ch_ok2,2026-08-10T10:30:00Z,129900,INR,card,expired_card,diya@example.com,Diya Patel
+ch_ok3,2026-08-10T12:15:00Z,29900,INR,upi,upi_timeout,kabir@example.com,Kabir Singh
+ch_atk01,2026-08-10T14:00:05Z,100,INR,card,card_declined,test01@mailinator.com,x
+ch_atk02,2026-08-10T14:00:22Z,100,INR,card,incorrect_cvc,test02@mailinator.com,x
+ch_atk03,2026-08-10T14:00:41Z,200,INR,card,card_declined,test03@mailinator.com,x
+ch_atk04,2026-08-10T14:01:03Z,100,INR,card,generic_decline,test04@mailinator.com,x
+ch_atk05,2026-08-10T14:01:20Z,150,INR,card,card_declined,test05@mailinator.com,x
+ch_atk06,2026-08-10T14:01:48Z,100,INR,card,incorrect_cvc,test06@mailinator.com,x
+ch_atk07,2026-08-10T14:02:10Z,100,INR,card,card_declined,test07@mailinator.com,x
+ch_atk08,2026-08-10T14:02:33Z,200,INR,card,generic_decline,test08@mailinator.com,x
+ch_atk09,2026-08-10T14:02:55Z,100,INR,card,card_declined,test09@mailinator.com,x
+ch_atk10,2026-08-10T14:03:12Z,100,INR,card,card_declined,test10@mailinator.com,x
+ch_ok4,2026-08-10T16:40:00Z,89900,INR,netbanking,issuer_unavailable,ananya@example.com,Ananya Rao
+ch_ok5,2026-08-10T18:05:00Z,59900,INR,card,do_not_honor,vivaan@example.com,Vivaan Mehta

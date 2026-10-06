@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recover — Payment Recovery Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+<style>
+  .drop{border:2px dashed #2b3648;border-radius:14px;padding:26px;text-align:center;background:var(--surface-2);cursor:pointer;transition:.14s}
+  .drop:hover,.drop.over{border-color:var(--brand);background:var(--surface-3)}
+  .drop b{color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--border)}
+  td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:hover td{background:var(--surface-2)}
+  .tag{font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap;display:inline-block}
+  .t-high{background:var(--green-soft);color:#6ee7b7}.t-medium{background:var(--amber-soft);color:#fcd34d}
+  .t-low{background:var(--red-soft);color:#fca5a5}.t-none{background:var(--surface-3);color:var(--muted)}
+  .money{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
+  .draftbox{margin-top:8px;background:var(--surface-3);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:13px;white-space:pre-wrap;display:none;color:var(--text)}
+  .rowbtn{font-size:12px;padding:6px 10px}
+  .hidden{display:none}
+  #spark{height:150px;width:100%}
+  .bar-mini{height:6px;background:var(--surface-3);border-radius:4px;overflow:hidden;width:60px;display:inline-block;vertical-align:middle}
+  .bar-mini>i{display:block;height:100%;background:var(--green)}
+</style>
+</head><body>
+
+<div class="topbar"><div class="in">
+  <div class="brand"><span class="mark">↺</span> Recover</div>
+  <nav class="nav"><a href="#" onclick="openTour();return false;">✨ Take a tour</a><span style="color:var(--muted);font-size:13px;padding:7px 0 7px 8px">Payment Recovery Agent</span></nav>
+</div></div>
+
+<div class="intro-overlay" id="intro">
+  <div class="intro-card">
+    <div class="intro-icon" id="iIcon"></div>
+    <h2 id="iTitle"></h2>
+    <p id="iBody"></p>
+    <div class="intro-dots" id="iDots"></div>
+    <div class="intro-actions">
+      <button class="link-btn" id="iBack" onclick="introGo(-1)">Back</button>
+      <button class="btn btn-primary" id="iNext" onclick="introGo(1)">Next</button>
+    </div>
+    <div style="margin-top:14px"><button class="link-btn" onclick="closeIntro()">Skip intro</button></div>
+  </div>
+</div>
+
+<div class="tour-overlay" id="tour">
+  <div class="tour-ring" id="tRing"></div>
+  <div class="tour-tip" id="tTip">
+    <div class="tour-step" id="tStep"></div>
+    <h3 id="tTitle"></h3>
+    <p id="tBody"></p>
+    <div class="tour-dots" id="tDots"></div>
+    <div class="tour-actions">
+      <button class="link-btn" onclick="closeTour()">Skip tour</button>
+      <div class="r">
+        <button class="btn" id="tBack" onclick="tourGo(-1)">Back</button>
+        <button class="btn btn-primary" id="tNext" onclick="tourGo(1)">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="scrolldown" id="scrollDown" title="Scroll down">↓</div>
+
+<div class="wrap">
+  <div class="page-title">Recover lost revenue from failed payments</div>
+  <div class="page-sub">Upload your failed/pending payments. The agent diagnoses each failure, scores how likely it is to be recovered, and drafts the outreach — prioritized by rupees you can win back. · <a href="#" onclick="openTour();return false;">Take the tour</a></div>
+
+  <div class="card" id="overviewCard" style="margin-top:14px">
+    <h3>📊 Live activity <span id="simBadge" class="tag t-medium" style="display:none">● SIMULATED demo traffic</span></h3>
+    <div class="hint">Real session activity — rises as you analyze payments, run recovery, or receive Stripe events. <a href="#" id="simToggle">▶ Simulate live traffic</a> to see it stream like production.</div>
+    <div class="kpis" style="margin:12px 0 0">
+      <div class="kpi adaptive"><div class="stripe"></div><div class="num" id="oSeen">0</div><div class="sub">payments seen</div></div>
+      <div class="kpi ml"><div class="stripe"></div><div class="num" id="oRecovered">₹0</div><div class="sub">revenue recovered</div></div>
+      <div class="kpi static"><div class="stripe"></div><div class="num" id="oThreats">0</div><div class="sub">anomalies caught</div></div>
+      <div class="kpi adaptive"><div class="stripe"></div><div class="num" id="oSent">0</div><div class="sub">messages sent</div></div>
+    </div>
+    <canvas id="spark" width="960" height="120" style="margin-top:14px"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:#f87171"></span>failures</span>
+      <span><span class="dot" style="background:var(--amber)"></span>anomalies</span>
+      <span><span class="dot" style="background:var(--green)"></span>messages sent</span>
+    </div>
+  </div>
+
+  <div class="card" id="benchCard" style="margin-top:14px">
+    <h3>📈 Proven results <span class="tag t-high">measured</span></h3>
+    <div class="hint">Run the agent against a labeled 52-payment dataset with known outcomes — fully reproducible, so you can verify the numbers yourself. <a href="benchmark_labeled.csv" download>download the dataset</a></div>
+    <div style="margin-top:12px"><button class="btn btn-primary" id="benchBtn" onclick="runBench()">Run benchmark</button></div>
+    <div id="benchOut" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card" style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <span style="font-weight:700;color:var(--ink)">📱 Demo mode</span>
+    <input id="demoRecipient" placeholder="your phone (+91…) or email — receive the messages yourself"
+      style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:9px;padding:9px 12px;font-family:inherit;font-size:13px">
+    <span class="muted" style="font-size:12px">Blank = use each customer's own contact.</span>
+  </div>
+
+  <div class="card" id="livePanel" style="margin-top:14px">
+    <h3>🔴 Live — failures from Stripe</h3>
+    <div class="hint" id="liveHint">Listening for Stripe <code>charge.failed</code> events…</div>
+    <div id="liveList" style="margin-top:10px"></div>
+    <div id="liveActions" style="margin-top:10px"></div>
+  </div>
+
+  <div id="uploadCard" class="card" style="margin-top:18px">
+    <div class="drop" id="drop">
+      <div style="font-size:28px">📤</div>
+      <div style="margin-top:6px"><b>Drop your payments CSV here</b> or click to choose</div>
+      <div class="muted" style="margin-top:4px;font-size:12px">Stripe/Razorpay export format · or <a href="#" id="sampleLink">try the sample</a> · <a href="#" id="attackLink">try attack sample</a> · <a href="sample_failed_payments.csv" download>download sample</a></div>
+      <input type="file" id="file" accept=".csv" class="hidden">
+    </div>
+  </div>
+
+  <div class="card" id="dropinCard" style="margin-top:14px">
+    <h3>🔌 Drop-in integration</h3>
+    <div class="hint">Wire Recover into any stack in two minutes — no dashboard needed.</div>
+    <div style="margin-top:10px;font-size:13px;color:var(--text);line-height:1.6">
+      <b>Autonomous:</b> point your Stripe/Razorpay webhook at <code>/webhooks/stripe</code> and set <code>AUTO_RECOVER=true</code> — failures recover themselves.<br>
+      <b>Or call the API directly from your code:</b>
+      <pre style="background:#0a0f1c;color:#c0cad9;border:1px solid var(--border);padding:12px;border-radius:9px;overflow-x:auto;margin-top:8px;font-size:12px;font-family:ui-monospace,monospace">curl -X POST /api/recover -d '{
+  "charge_id":"ch_1","customer_email":"a@b.com","amount":49900,
+  "currency":"INR","failure_code":"insufficient_funds","send":true
+}'</pre>
+      Returns the diagnosis, recovery probability, the AI-written message, and (with <code>send:true</code>) sends it.
+    </div>
+  </div>
+
+  <div class="card cta" style="margin-top:14px">
+    <h3>For merchants</h3>
+    <div class="sub2">Losing revenue to failed payments, or getting hit by card-testing bots? Recover drops into your existing Stripe/Razorpay setup — recovering the real failures and quarantining the fraud, automatically. Want it tailored to your stack?</div>
+    <div style="margin-top:14px"><a class="btn btn-white" href="mailto:you@example.com?subject=Custom%20Recover%20plugin">Get a custom plugin →</a></div>
+  </div>
+
+  <div id="results" class="hidden">
+    <div class="kpis" style="margin-top:18px">
+      <div class="kpi static"><div class="stripe"></div><div class="top"><span class="tag" style="color:var(--muted)">AT RISK</span></div>
+        <div class="num" id="kAtRisk">—</div><div class="sub" id="kCount">failed payments</div></div>
+      <div class="kpi ml"><div class="stripe"></div><div class="top"><span class="tag" style="color:var(--green)">RECOVERABLE</span></div>
+        <div class="num" id="kRecover">—</div><div class="sub" id="kPct">expected win-back</div></div>
+      <div class="kpi adaptive"><div class="stripe"></div><div class="top"><span class="tag" style="color:var(--brand)">ACTIONABLE</span></div>
+        <div class="num" id="kActionable">—</div><div class="sub">payments worth chasing</div></div>
+    </div>
+
+    <div class="card hidden" id="threatCard" style="border-color:rgba(248,113,113,.4);background:rgba(248,113,113,.07)">
+      <h3 style="color:var(--red)">🛡️ Threats detected</h3>
+      <div class="hint">Not every failed payment is lost revenue — some are fraud. These are quarantined from recovery, never messaged.</div>
+      <div id="threatList" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3>Recovery plan</h3>
+      <div class="hint">Sorted by expected revenue recovered. Draft a message for the ones worth chasing, or let the agent run the whole plan.</div>
+      <div style="overflow-x:auto;margin-top:10px">
+        <table id="tbl"><thead><tr>
+          <th>Customer</th><th>Amount</th><th>Why it failed</th><th>Recover?</th><th>Likelihood</th><th>Expected</th><th></th>
+        </tr></thead><tbody id="tbody"></tbody></table>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary" id="runBtn" onclick="runPlan()">▶ Approve &amp; run recovery</button>
+        <span class="muted" style="font-size:12px">The agent sends the outreach and schedules retries for every recoverable payment.</span>
+      </div>
+    </div>
+
+    <div class="card hidden" id="logCard" style="margin-top:16px">
+      <h3>Agent action log</h3>
+      <div class="hint" id="logSummary">Running…</div>
+      <div id="log" style="margin-top:10px"></div>
+    </div>
+
+    <div style="margin-top:12px"><button class="btn" onclick="reset()">↑ Upload another file</button></div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+function inr(paise){return "₹"+Math.round(paise/100).toLocaleString('en-IN');}
+const drop=$("drop"),file=$("file");
+drop.onclick=()=>file.click();
+file.onchange=()=>{if(file.files[0])readAndAnalyze(file.files[0]);};
+["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("over");}));
+["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("over");}));
+drop.addEventListener("drop",ev=>{if(ev.dataTransfer.files[0])readAndAnalyze(ev.dataTransfer.files[0]);});
+$("sampleLink").onclick=async e=>{e.preventDefault();const t=await(await fetch("sample_failed_payments.csv")).text();analyze(t);};
+$("attackLink").onclick=async e=>{e.preventDefault();const t=await(await fetch("sample_with_attack.csv")).text();analyze(t);};
+
+function readAndAnalyze(f){const r=new FileReader();r.onload=()=>analyze(r.result);r.readAsText(f);}
+
+let ROWS=[];
+async function analyze(csv){
+  try{
+    const res=await fetch("/analyze",{method:"POST",headers:{"Content-Type":"text/csv"},body:csv});
+    if(!res.ok){alert("Could not parse that CSV.");return;}
+    const a=await res.json();const s=a.summary;ROWS=a.rows;
+    $("uploadCard").classList.add("hidden");$("results").classList.remove("hidden");
+    $("kAtRisk").textContent=inr(s.at_risk_amount);
+    $("kCount").textContent=s.count+" failed payments";
+    $("kRecover").textContent=inr(s.recoverable_amount);
+    $("kPct").textContent=s.recoverable_pct+"% expected win-back";
+    const actionable=ROWS.filter(r=>!r.attack && r.diagnosis.action!=="review").length;
+    $("kActionable").textContent=actionable;
+    // threats
+    const tc=$("threatCard");
+    if(a.threats && a.threats.length){
+      tc.classList.remove("hidden");
+      $("threatList").innerHTML=a.threats.map(t=>
+        '<div class="gw"><span style="width:18px">⚠</span><div style="flex:1"><b>Card-testing attack</b> <span class="tag t-low">'+t.risk+' risk</span>'+
+        '<div class="muted" style="font-size:12px;margin-top:2px">'+t.count+' failed auths '+t.window_start+'–'+t.window_end+' across '+t.distinct_customers+
+        ' cards ('+inr(t.total_amount)+' total). '+t.explanation+'</div></div></div>').join("");
+    } else { tc.classList.add("hidden"); }
+    renderRows();
+  }catch(e){alert("Something went wrong analyzing the file.");}
+}
+
+function renderRows(){
+  const tb=$("tbody");tb.innerHTML="";
+  ROWS.forEach((r,i)=>{
+    const rec=r.attack?"none":r.diagnosis.recoverable;
+    const recCell=r.attack?'<span class="tag t-low">⚠ fraud</span>':'<span class="tag t-'+rec+'">'+rec+'</span>';
+    const actCell=r.attack?'<span class="muted" style="font-size:12px">quarantined</span>'
+      :(r.diagnosis.action==="review"?'<span class="muted" style="font-size:12px">review</span>'
+      :'<button class="btn btn-primary rowbtn" onclick="draft('+i+',this)">Draft</button>');
+    const tr=document.createElement("tr");
+    if(r.attack)tr.style.opacity="0.55";
+    tr.innerHTML=
+      '<td><b>'+(r.customer_name||"—")+'</b><div class="muted" style="font-size:11px">'+(r.customer_email||"")+'</div></td>'+
+      '<td class="money">'+inr(r.amount)+'</td>'+
+      '<td>'+r.failure_code+'<div class="muted" style="font-size:11px;max-width:230px">'+r.diagnosis.reason+'</div></td>'+
+      '<td>'+recCell+'</td>'+
+      '<td><span class="bar-mini"><i style="width:'+Math.round(r.p_recover*100)+'%"></i></span> '+Math.round(r.p_recover*100)+'%</td>'+
+      '<td class="money">'+inr(r.expected_recovered)+'</td>'+
+      '<td>'+actCell+'</td>';
+    const dr=document.createElement("tr");
+    dr.innerHTML='<td colspan="7" style="padding-top:0;border:none"><div class="draftbox" id="draft'+i+'"></div></td>';
+    tb.appendChild(tr);tb.appendChild(dr);
+  });
+}
+
+async function draft(i,btn){
+  const r=ROWS[i];const box=$("draft"+i);
+  btn.disabled=true;btn.textContent="…";box.style.display="block";box.textContent="Drafting…";
+  try{
+    const res=await fetch("/draft",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({charge_id:r.charge_id,customer_name:r.customer_name,amount:r.amount,
+        currency:r.currency,method:r.method,failure_code:r.failure_code})});
+    const d=await res.json();
+    const head='DRAFTED MESSAGE '+(d.mode==="ai"?'· ✨ AI-written':'· template');
+    const noteHtml=(d.note && d.mode!=="ai")?'<div style="font-size:11px;color:#b54708;margin-top:6px">⚠ '+d.note+'</div>':'';
+    box.innerHTML='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+head+'</div>'+(d.message||"—")+noteHtml;
+  }catch(e){box.textContent="Draft failed.";}
+  btn.disabled=false;btn.textContent="Draft";
+}
+function reset(){$("results").classList.add("hidden");$("uploadCard").classList.remove("hidden");$("file").value="";$("logCard").classList.add("hidden");}
+function demoRecipient(){return $("demoRecipient").value.trim();}
+function toRows(arr){return arr.map(r=>({charge_id:r.charge_id,customer_name:r.customer_name,customer_email:r.customer_email,amount:r.amount,currency:r.currency,method:r.method,failure_code:r.failure_code,attack:r.attack}));}
+
+function actionRow(a){
+  const m={sent:"t-high",simulated:"t-medium",scheduled:"t-high",skipped:"t-none",failed:"t-low"};
+  const icon=a.status==="skipped"?"⤫":a.channel==="sms"?"📱":a.channel==="email"?"✉️":"•";
+  const modeTag=a.mode==="ai"?' <span class="tag t-high">✨ AI</span>':a.mode==="template"?' <span class="tag t-none">template</span>':'';
+  return '<div class="gw"><span style="width:18px">'+icon+'</span><div style="flex:1"><b>'+(a.customer||a.charge_id)+
+    '</b> <span class="tag '+(m[a.status]||"t-none")+'">'+a.status+'</span>'+modeTag+
+    '<div class="muted" style="font-size:12px;margin-top:2px">'+(a.detail||"")+'</div>'+
+    (a.message?'<div class="muted" style="font-size:12px;margin-top:4px;font-style:italic">“'+a.message+'”</div>':'')+'</div></div>';
+}
+async function execAndRender(rows, container){
+  container.innerHTML='<div class="hint">Agent working through the plan…</div>';
+  try{
+    const res=await fetch("/execute",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({rows:rows,demo_recipient:demoRecipient()})});
+    if(res.status===429){container.innerHTML='<div class="hint">Rate limit — wait a moment and try again.</div>';return;}
+    const d=await res.json();const s=d.summary;
+    let html='<div class="hint" style="margin-bottom:8px"><b>'+s.sent+'</b> sent · <b>'+s.simulated+'</b> simulated · <b>'+s.skipped+'</b> skipped · <b>'+inr(s.revenue_in_flight)+'</b> revenue in flight</div>';
+    d.actions.forEach(a=>html+=actionRow(a));
+    container.innerHTML=html;
+  }catch(e){container.innerHTML='<div class="hint">Run failed.</div>';}
+}
+async function runPlan(){
+  const btn=$("runBtn");btn.disabled=true;btn.textContent="Running…";
+  $("logCard").classList.remove("hidden");$("logSummary").textContent="";
+  await execAndRender(toRows(ROWS), $("log"));
+  btn.disabled=false;btn.textContent="▶ Approve & run recovery";
+}
+
+// live Stripe feed
+let LIVE=[];
+async function pollLive(){
+  try{
+    const d=await(await fetch("/live")).json();
+    LIVE=d.items||[];
+    const list=$("liveList");
+    if(!LIVE.length){$("liveHint").innerHTML="Listening for Stripe <code>charge.failed</code> events… (connect the webhook — see README)";list.innerHTML="";const b=$("liveRecover");if(b)b.remove();return;}
+    $("liveHint").innerHTML="<b>"+LIVE.length+"</b> live failure(s) received from Stripe.";
+    list.innerHTML="";
+    LIVE.slice(0,8).forEach(it=>{
+      const row=document.createElement("div");row.className="gw";
+      row.innerHTML='<span class="muted" style="width:64px;font-size:11px">'+it.received+'</span>'+
+        '<span style="flex:1"><b>'+(it.customer_name||it.charge_id)+'</b> '+inr(it.amount)+
+        ' <span class="muted">· '+it.failure_code+'</span></span>'+
+        '<span class="tag t-'+it.diagnosis.recoverable+'">'+Math.round(it.p_recover*100)+'%</span>';
+      list.appendChild(row);
+    });
+    if(!$("liveRecover")){
+      const b=document.createElement("button");b.id="liveRecover";b.className="btn btn-primary";b.style.marginTop="10px";
+      b.textContent="▶ Recover these live failures";b.onclick=runLive;
+      list.after(b);
+    }
+  }catch(e){}
+}
+async function runBench(){
+  const b=$("benchBtn");b.disabled=true;b.textContent="Running…";
+  try{
+    const d=await(await fetch("/benchmark")).json();
+    const money=v=>"₹"+Math.round(v/100).toLocaleString('en-IN');
+    let h='<div class="hint" style="margin-bottom:8px">'+d.rows+' payments · '+money(d.recoverable_truth)+' genuinely recoverable</div>';
+    h+='<div style="overflow-x:auto"><table><thead><tr><th>Strategy</th><th>Recovered</th><th>Rate</th><th>Messages</th><th>Fraud contacted</th><th>Precision</th></tr></thead><tbody>';
+    d.strategies.forEach(s=>{
+      const hl=s.name.indexOf("Recover")===0?' style="background:var(--brand-soft)"':'';
+      h+='<tr'+hl+'><td><b>'+s.name+'</b></td><td class="money">'+money(s.recovered_amount)+'</td><td>'+s.recovery_rate_pct+'%</td><td>'+s.messages_sent+'</td><td>'+(s.fraud_contacted?'<span class="tag t-low">'+s.fraud_contacted+'</span>':'0')+'</td><td>'+s.precision_pct+'%</td></tr>';
+    });
+    h+='</tbody></table></div>';
+    const e=d.exceptions;
+    h+='<div class="hint" style="margin-top:10px"><b>Exceptions left for review:</b> '+e.count+' ('+money(e.amount)+') — '+e.fraud_quarantined+' fraud quarantined, '+e.hard_declines+' hard declines, '+e.below_threshold+' below threshold.</div>';
+    h+='<div class="hint" style="margin-top:8px"><b>Stopping rules:</b><ul style="margin:6px 0 0 18px;padding:0">'+d.stopping_rules.map(r=>'<li>'+r+'</li>').join('')+'</ul></div>';
+    $("benchOut").innerHTML=h;
+  }catch(e){$("benchOut").innerHTML='<div class="hint">Benchmark failed.</div>';}
+  b.disabled=false;b.textContent="Run benchmark";
+}
+setInterval(pollLive,2500); pollLive();
+
+// live activity dashboard
+function drawSpark(series){
+  const sc=$("spark"); if(!sc)return;
+  const dpr=window.devicePixelRatio||1;
+  const W=sc.clientWidth||960, H=sc.clientHeight||140;
+  sc.width=Math.round(W*dpr); sc.height=Math.round(H*dpr);
+  const ctx=sc.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const pad=10;
+  if(!series||series.length<2){ctx.fillStyle="#9aa7c2";ctx.font="13px Inter,sans-serif";ctx.fillText("Waiting for activity — hit “Simulate live traffic”, or try the sample.",pad,H/2);return;}
+  const maxV=Math.max(1,...series.map(p=>Math.max(p.failures,p.threats,p.sent)));
+  const line=(key,color)=>{ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.lineJoin="round";ctx.lineCap="round";ctx.beginPath();
+    series.forEach((p,i)=>{const x=pad+(W-2*pad)*(i/(series.length-1)),y=H-pad-(H-2*pad)*(p[key]/maxV);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();};
+  line("failures","#f87171");line("threats","#fbbf24");line("sent","#34d399");
+}
+async function pollOverview(){
+  try{
+    const o=await(await fetch("/overview")).json();
+    $("oSeen").textContent=o.payments_seen;
+    $("oRecovered").textContent=inr(o.recovered);
+    $("oThreats").textContent=o.threats;
+    $("oSent").textContent=o.sent;
+    drawSpark(o.series);
+  }catch(e){}
+}
+setInterval(pollOverview,2000); pollOverview();
+
+// honest demo-traffic simulator (clearly labeled)
+let simTimer=null;
+function startSim(){ if(simTimer)return; if($("simToggle"))$("simToggle").textContent="⏸ Stop simulation"; if($("simBadge"))$("simBadge").style.display="inline-block"; simTimer=setInterval(()=>{fetch("/simulate",{method:"POST"}).catch(()=>{});},1200); }
+function stopSim(){ if(!simTimer)return; clearInterval(simTimer); simTimer=null; if($("simToggle"))$("simToggle").textContent="▶ Simulate live traffic"; if($("simBadge"))$("simBadge").style.display="none"; }
+$("simToggle") && ($("simToggle").onclick=(e)=>{e.preventDefault(); simTimer?stopSim():startSim();});
+
+// ---- spotlight tour ----
+const TOUR=[
+ {sel:"#overviewCard",title:"Live activity",body:"Real-time view of payments seen, revenue recovered, anomalies caught, and messages sent. In production this streams from your Stripe webhook — right now it's running on simulated traffic so you can see it move."},
+ {sel:"#simToggle",title:"See it live",body:"No live traffic yet? Click this to stream realistic demo events through the real pipeline and watch the dashboard move."},
+ {sel:"#uploadCard",title:"Analyze real payments",body:"Drop a failed-payments CSV, or hit “try the sample”. The agent diagnoses each failure, scores how recoverable it is, and drafts the outreach — ranked by rupees."},
+ {sel:"#attackLink",title:"Our USP — fraud detection",body:"This is the differentiator. Not every failed payment is lost revenue — some are card-testing attacks (bursts of tiny failed auths across many cards). Click here to watch Recover detect and quarantine them."},
+ {sel:"#demoRecipient",title:"Receive the messages",body:"Put your own email here and every recovery message routes to you — so you can see a real message land during the demo."},
+ {sel:"#benchCard",title:"Proven, and reproducible",body:"Don't take our word for it. Run the benchmark on a labeled 52-payment dataset: the agent recovers ~85% of recoverable revenue with half the messages and zero fraudsters contacted. Download the data and verify it yourself."},
+ {sel:"#dropinCard",title:"Drop-in integration",body:"Integrate in two minutes: point a webhook with AUTO_RECOVER, or call POST /api/recover from your code. It's a component, not just an app."},
+ {title:"You're set",body:"Try the simulation, run the sample, and check the attack sample to see fraud caught. Merchants can reach out for a custom plugin from the card below."}
+];
+let tIdx=0;
+function renderTourContent(){
+  const s=TOUR[tIdx];
+  $("tStep").textContent="STEP "+(tIdx+1)+" / "+TOUR.length;
+  $("tTitle").textContent=s.title; $("tBody").textContent=s.body;
+  $("tDots").innerHTML=TOUR.map((_,i)=>'<i class="'+(i===tIdx?"on":"")+'"></i>').join("");
+  $("tBack").style.visibility=tIdx===0?"hidden":"visible";
+  $("tNext").textContent=tIdx===TOUR.length-1?"Get started →":"Next";
+}
+function positionTour(){
+  const s=TOUR[tIdx], ring=$("tRing"), tip=$("tTip");
+  const el=s.sel?document.querySelector(s.sel):null;
+  if(!el){ // centered card, no ring
+    ring.classList.add("hide");
+    tip.style.left="50%"; tip.style.top="50%"; tip.style.transform="translate(-50%,-50%)";
+    return;
+  }
+  ring.classList.remove("hide"); tip.style.transform="none";
+  const r=el.getBoundingClientRect(), pad=8;
+  ring.style.left=(r.left-pad)+"px"; ring.style.top=(r.top-pad)+"px";
+  ring.style.width=(r.width+2*pad)+"px"; ring.style.height=(r.height+2*pad)+"px";
+  const tipW=Math.min(340,window.innerWidth-32), gap=14;
+  let left=Math.min(Math.max(16,r.left), window.innerWidth-tipW-16);
+  let top=r.bottom+gap;
+  if(top+tip.offsetHeight>window.innerHeight-16) top=Math.max(16,r.top-gap-tip.offsetHeight);
+  tip.style.left=left+"px"; tip.style.top=top+"px";
+}
+function showStep(){
+  renderTourContent();
+  const s=TOUR[tIdx], el=s.sel?document.querySelector(s.sel):null;
+  if(el){ el.scrollIntoView({block:"center",behavior:"smooth"}); setTimeout(positionTour,380); }
+  else positionTour();
+}
+function tourGo(d){tIdx+=d;if(tIdx>=TOUR.length){closeTour();return;}if(tIdx<0)tIdx=0;showStep();}
+function openTour(){startSim();tIdx=0;$("tour").classList.add("show");showStep();}
+function closeTour(){$("tour").classList.remove("show");try{localStorage.setItem("recover_tour_seen","1");}catch(e){}}
+window.addEventListener("resize",()=>{if($("tour").classList.contains("show"))positionTour();});
+window.addEventListener("scroll",()=>{if($("tour").classList.contains("show"))positionTour();},true);
+
+// ---- intro modal (4 slides) ----
+const SLIDES=[
+ {icon:"💸",title:"What Recover is",body:"Businesses lose 10–15% of revenue to failed payments — and the same failed-payment stream hides card-testing fraud. Recover is an AI middleware on top of Stripe/Razorpay that recovers the real failures and quarantines the fraud, automatically."},
+ {icon:"🔒",title:"About the data",body:"Real failed-payment data is private by law (PCI-DSS, GDPR, DPDP) — it only exists inside a merchant's own gateway. So this prototype is validated two ways: against real Stripe test-mode webhook events, and on a labelled synthetic benchmark with known outcomes you can reproduce. In production it runs on the merchant's own live stream."},
+ {icon:"🧠",title:"How it's designed",body:"An agent loop: diagnose each failure against real card-decline codes → score recovery probability with an ML model → decide (skip dead cards, retry soft declines, quarantine fraud) → act (personalized outreach + scheduled retry). Model proposes, safety rules dispose — all prioritized by expected rupees recovered."},
+ {icon:"⚙️",title:"The tech",body:"Dependency-free Go (standard library only), single service. AI-written messages via Hugging Face, real email + a signature-verified live Stripe webhook. Deployed live, health-checked and panic-safe. Drops into any stack via webhook or one API call."}
+];
+let iIdx=0;
+function renderIntro(){
+  const s=SLIDES[iIdx];
+  $("iIcon").textContent=s.icon; $("iTitle").textContent=s.title; $("iBody").textContent=s.body;
+  $("iDots").innerHTML=SLIDES.map((_,i)=>'<i class="'+(i===iIdx?"on":"")+'"></i>').join("");
+  $("iBack").style.visibility=iIdx===0?"hidden":"visible";
+  $("iNext").textContent=iIdx===SLIDES.length-1?"✨ Take a tour":"Next";
+}
+function introGo(d){iIdx+=d;if(iIdx>=SLIDES.length){closeIntro();openTour();return;}if(iIdx<0)iIdx=0;renderIntro();}
+function openIntro(){iIdx=0;renderIntro();$("intro").classList.add("show");}
+function closeIntro(){$("intro").classList.remove("show");try{localStorage.setItem("recover_intro_seen","1");}catch(e){}}
+try{ if(!localStorage.getItem("recover_intro_seen")) openIntro(); }catch(e){ openIntro(); }
+
+// ---- scroll cue ----
+const sd=$("scrollDown");
+if(sd){
+  sd.onclick=()=>window.scrollBy({top:Math.round(window.innerHeight*0.82),behavior:"smooth"});
+  const fade=()=>{const hide=window.scrollY>180;sd.style.opacity=hide?"0":"1";sd.style.pointerEvents=hide?"none":"auto";};
+  window.addEventListener("scroll",fade);fade();
+}
+</script>
+</body></html>
