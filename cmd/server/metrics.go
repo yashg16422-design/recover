@@ -18,6 +18,7 @@ type mPoint struct {
 	Failures int    `json:"failures"`
 	Threats  int    `json:"threats"`
 	Sent     int    `json:"sent"`
+	Graph    int    `json:"graph"` // NEW: cumulative graph-model flags (review + quarantine)
 }
 
 var (
@@ -32,7 +33,8 @@ var (
 )
 
 func snapshotLocked() {
-	mSeries = append(mSeries, mPoint{time.Now().Format("15:04:05"), mFailures, mThreats, mSent})
+	_, gr, gq := graphCounters()
+	mSeries = append(mSeries, mPoint{time.Now().Format("15:04:05"), mFailures, mThreats, mSent, gr + gq})
 	if len(mSeries) > 120 {
 		mSeries = mSeries[len(mSeries)-120:]
 	}
@@ -41,12 +43,17 @@ func snapshotLocked() {
 func recordFailures(n int)      { mMu.Lock(); mFailures += n; snapshotLocked(); mMu.Unlock() }
 func recordSuccesses(n int)     { mMu.Lock(); mSuccesses += n; snapshotLocked(); mMu.Unlock() }
 func recordThreats(t, q int)    { mMu.Lock(); mThreats += t; mQuarantined += q; snapshotLocked(); mMu.Unlock() }
+func recordGraphQuarantined(n int) { mMu.Lock(); mQuarantined += n; snapshotLocked(); mMu.Unlock() }
 func recordSent(n int, r float64) { mMu.Lock(); mSent += n; mRecovered += r; snapshotLocked(); mMu.Unlock() }
 
 func handleOverview(w http.ResponseWriter, _ *http.Request) {
+	gc, gr, gq := graphCounters()
 	mMu.Lock()
 	defer mMu.Unlock()
 	writeJSON(w, map[string]any{
+		"graph_checked":     gc, // NEW
+		"graph_review":      gr,
+		"graph_quarantined": gq,
 		"payments_seen": mFailures + mSuccesses,
 		"failures":      mFailures,
 		"successes":     mSuccesses,

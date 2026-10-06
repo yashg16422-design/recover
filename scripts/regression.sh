@@ -20,7 +20,7 @@ istrue(){ [ "$2" = "True" ] && ok "$1" || no "$1" "got [$2]"; }
 start(){ stop; env -i PATH="$PATH" HOME="$HOME" "$@" "$BIN" -addr :$PORT >/tmp/recover_reg_server.log 2>&1 & SRV=$!
   for i in $(seq 1 50); do curl -fs $BASE/health >/dev/null 2>&1 && return; sleep 0.1; done; no "server starts" "see /tmp/recover_reg_server.log"; }
 stop(){ [ -n "$SRV" ] && kill $SRV 2>/dev/null && wait $SRV 2>/dev/null; SRV=""; }
-trap 'stop; [ -n "$SMTP" ] && kill $SMTP 2>/dev/null' EXIT
+trap 'stop; [ -n "$SMTP" ] && kill $SMTP 2>/dev/null; [ -f /tmp/recover_reg_fraud.pid ] && kill $(cat /tmp/recover_reg_fraud.pid) 2>/dev/null' EXIT
 post_csv(){ curl -s -X POST -H 'Content-Type: text/csv' --data-binary @"$1" $BASE/analyze; }
 say "# Recover regression — label=$LABEL — $(date '+%Y-%m-%d %H:%M:%S') — binary=$BIN"
 
@@ -127,6 +127,55 @@ N0=$(grep -c '^=====' $MAIL)
 curl -s -o /dev/null -X POST $BASE/webhooks/stripe -d '{"type":"charge.failed","data":{"object":{"id":"ch_hard","amount":9900,"failure_code":"stolen_card","billing_details":{"email":"x@y.com","name":"X"}}}}'; sleep 1
 eq "AUTO_RECOVER: hard decline is NOT messaged" "$(( $(grep -c '^=====' $MAIL) - N0 ))" 0
 
+
+############ D. graph fraud signal (only when the binary has it AND the fraud service can start) ############
+start FOO=1
+if [ "$(curl -s -o /dev/null -w '%{http_code}' $BASE/api/graph/status)" = 200 ] && [ -x fraud/.venv-serve/bin/uvicorn ] && [ -f fraud/artifacts/scores.npy ]; then
+  say "## D. graph fraud signal (new): disabled mode must equal the baseline"
+  eq "no FRAUD_URL -> graph_status disabled" "$(curl -s $BASE/api/graph/status | py "d['status']")" disabled
+  eq "no FRAUD_URL -> /analyze has graph_status disabled" "$(post_csv web/sample_failed_payments.csv | py "d['summary']['graph_status']")" disabled
+  GP=8102; (cd fraud/serve; exec ../.venv-serve/bin/uvicorn app:app --port $GP --log-level warning >/dev/null 2>&1) & echo $! > /tmp/recover_reg_fraud.pid
+  for i in $(seq 1 60); do curl -fs http://127.0.0.1:$GP/health >/dev/null 2>&1 && break; sleep 0.2; done
+  start FRAUD_URL=http://127.0.0.1:$GP
+  say "## D. graph signal ON"
+  eq "graph status online" "$(curl -s $BASE/api/graph/status | py "d['status']+'|'+str(d['online'])")" "ok|True"
+  G=$(post_csv web/sample_failed_payments.csv); echo "$G" > regression/analyze_sample_graph_$LABEL.json
+  eq "analyze: graph_status ok" "$(echo "$G" | py "d['summary']['graph_status']")" ok
+  istrue "analyze: every linked row has a numeric graph_risk in [0,1]" "$(echo "$G" | py "all(isinstance(r['graph_risk'],float) and 0<=r['graph_risk']<=1 for r in d['rows'])")"
+  istrue "analyze: every row has fraud_signals (list), quarantined (bool), graph_link explicit" "$(echo "$G" | py "all(isinstance(r['fraud_signals'],list) and isinstance(r['quarantined'],bool) and r['graph_link']=='explicit' for r in d['rows'])")"
+  istrue "analyze: review band flags at least one row (flag only, not quarantined)" "$(echo "$G" | py "d['summary']['graph_review']>=1 and any(any(x['level']=='review' for x in r['fraud_signals']) and not r['quarantined'] for r in d['rows'])")"
+  istrue "analyze: ORIGINAL row/summary fields unchanged vs main (graph on)" "$(python3 scripts/regcmp.py old_fields_same regression/analyze_sample_main.json regression/analyze_sample_graph_$LABEL.json)"
+  GA=$(post_csv web/sample_with_attack.csv)
+  istrue "attack sample: burst rows carry a card_testing signal" "$(echo "$GA" | py "sum(1 for r in d['rows'] if any(x['kind']=='card_testing' for x in r['fraud_signals']))>=6")"
+  istrue "attack sample: graph quarantines a non-burst row on its own (second signal)" "$(echo "$GA" | py "any(r['quarantined'] and not r['attack'] and r['fraud_signals'][0]['kind']=='graph_risk' for r in d['rows'])")"
+  istrue "attack sample: every quarantined row says why" "$(echo "$GA" | py "all(len(r['fraud_signals'])>=1 and r['fraud_signals'][0]['detail'] for r in d['rows'] if r['quarantined'])")"
+  istrue "attack sample: recoverable excludes ALL quarantined rows" "$(echo "$GA" | py "abs(d['summary']['recoverable_amount']-sum(r['expected_recovered'] for r in d['rows'] if not r['quarantined']))<0.05")"
+  GX=$(curl -s -X POST $BASE/execute -d "$(echo "$GA" | jq -c '{rows:[.rows[]|{charge_id,customer_name,customer_email,amount,currency,method,failure_code,attack,quarantined,quarantine_reason:(.fraud_signals[0].detail // "")}],demo_recipient:"me@demo.test"}')")
+  istrue "execute: graph-quarantined row is skipped, not messaged" "$(echo "$GX" | py "any('graph model' in a['detail'] and a['status']=='skipped' and a['message']=='' for a in d['actions'])")"
+  for i in $(seq 1 60); do curl -s -X POST $BASE/simulate; echo; done > /tmp/recover_reg_sim.txt
+  istrue "simulate: response describes events; failure events carry the graph check (demo link)" "$(python3 -c "
+import json
+ev=[e for l in open('/tmp/recover_reg_sim.txt') if l.strip() for e in json.loads(l)['events']]
+print(len(ev)>0 and all('graph_status' in e and 'fraud_signals' in e and e['graph_link']=='demo' and e['graph_status']=='ok' for e in ev))")"
+  LV2=$(curl -s $BASE/live)
+  istrue "live: items carry graph fields (original fields untouched)" "$(echo "$LV2" | py "all(k in d['items'][0] for k in ['received','charge_id','customer_name','diagnosis','p_recover','graph_status','fraud_signals','quarantined'])")"
+  curl -s -o /dev/null -X POST $BASE/webhooks/stripe -d '{"type":"charge.failed","data":{"object":{"id":"ch_meta","amount":9900,"failure_code":"insufficient_funds","billing_details":{"email":"m@example.com","name":"Meta"},"metadata":{"graph_node_id":"136279"}}}}'
+  istrue "webhook: Stripe metadata graph_node_id -> explicit link + quarantine-level signal" "$(curl -s $BASE/live | py "[i for i in d['items'] if i['charge_id']=='ch_meta'][0]['graph_link']=='explicit' and [i for i in d['items'] if i['charge_id']=='ch_meta'][0]['quarantined']")"
+  AG=$(curl -s -X POST $BASE/api/recover -d '{"charge_id":"ch_g","customer_email":"a@b.com","amount":49900,"currency":"INR","failure_code":"insufficient_funds","graph_node_id":136279,"send":true}')
+  istrue "api/recover: graph fields present; quarantined payment is NOT sent" "$(echo "$AG" | py "d['graph_risk']>0.8 and d['quarantined'] and d['sent']=='skipped' and d['fraud_signals'][0]['kind']=='graph_risk'")"
+  eq "api/recover without node id -> not_linked" "$(curl -s -X POST $BASE/api/recover -d '{"charge_id":"ch_h","amount":1000,"failure_code":"insufficient_funds"}' | py "d['graph_status']")" not_linked
+  istrue "overview: graph counters rise" "$(curl -s $BASE/overview | py "d['graph_checked']>0 and 'graph_review' in d and 'graph_quarantined' in d and 'graph' in d['series'][-1]")"
+  say "## D. fail-open: kill the graph service mid-run"
+  kill $(cat /tmp/recover_reg_fraud.pid) 2>/dev/null; sleep 2.5
+  eq "status says offline" "$(curl -s $BASE/api/graph/status | py "d['status']")" offline
+  post_csv web/sample_failed_payments.csv > regression/analyze_sample_offline_$LABEL.json
+  eq "analyze still works; graph_status offline" "$(py "d['summary']['graph_status']" < regression/analyze_sample_offline_$LABEL.json)" offline
+  istrue "offline: nothing quarantined; numbers equal the no-graph baseline" "$(python3 scripts/regcmp.py offline_equal regression/analyze_sample_main.json regression/analyze_sample_offline_$LABEL.json)"
+  eq "offline: draft still works" "$(curl -s -X POST $BASE/draft -d '{"charge_id":"c","customer_name":"A","amount":1000,"currency":"INR","failure_code":"insufficient_funds"}' | py "d['mode']")" template
+  eq "offline: webhook still accepted" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/webhooks/stripe -d "$EV")" 200
+else
+  say "## D. skipped (this binary has no graph signal, or the fraud service/artifacts are missing)"
+fi
 stop
 say ""; say "RESULT label=$LABEL  PASS=$PASS  FAIL=$FAIL"
 [ $FAIL -eq 0 ]

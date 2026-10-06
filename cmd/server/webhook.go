@@ -33,6 +33,7 @@ type liveItem struct {
 	Diagnosis   Diagnosis `json:"diagnosis"`
 	PRecover    float64   `json:"p_recover"`
 	Expected    float64   `json:"expected_recovered"`
+	GraphFields           // NEW: graph_risk, fraud_signals, quarantined, ...
 }
 
 var (
@@ -116,12 +117,16 @@ func handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		it.PRecover = round2(p)
 		it.Expected = round2(p * it.Amount)
 		it.Received = time.Now().Format("15:04:05")
+		it = withGraph(it, it.GraphNodeID, false) // Stripe metadata.graph_node_id, else a labeled demo link
 		pushLive(it)
 		recordFailures(1)
+		if it.hasSignal("graph_risk", "quarantine") {
+			recordGraphQuarantined(1)
+		}
 
 		// Drop-in autonomous mode: if AUTO_RECOVER=true, recover immediately —
 		// no dashboard, no human approval. This is the plug-and-play developer path.
-		if os.Getenv("AUTO_RECOVER") == "true" {
+		if os.Getenv("AUTO_RECOVER") == "true" && !it.Quarantined {
 			go executeRow(execRow{ChargeID: it.ChargeID, Name: it.Name, Email: it.Email,
 				Amount: it.Amount, Currency: it.Currency, Method: it.Method,
 				FailureCode: it.FailureCode}, os.Getenv("TEST_RECIPIENT"))
@@ -145,6 +150,7 @@ func parseFailure(obj json.RawMessage) liveItem {
 		PaymentMethodDetails struct {
 			Type string `json:"type"`
 		} `json:"payment_method_details"`
+		Metadata         map[string]string `json:"metadata"`
 		LastPaymentError struct {
 			Code        string `json:"code"`
 			DeclineCode string `json:"decline_code"`
@@ -163,6 +169,7 @@ func parseFailure(obj json.RawMessage) liveItem {
 			it.FailureCode = c.LastPaymentError.Code
 		}
 	}
+	it.GraphNodeID = parseNodeID(c.Metadata["graph_node_id"]) // explicit link, if the merchant sends one
 	if it.Method == "" {
 		it.Method = "card"
 	}
@@ -172,5 +179,19 @@ func parseFailure(obj json.RawMessage) liveItem {
 	if it.ChargeID == "" {
 		it.ChargeID = "evt_" + time.Now().Format("150405")
 	}
+	return it
+}
+
+// withGraph runs the graph fraud check on a live/simulated item. explicit nil => demo link
+// (a labeled link to a random test-period node); the item then carries graph_link:"demo".
+func withGraph(it liveItem, explicit *int, burst bool) liveItem {
+	it.ensure()
+	if burst {
+		it.addSignal(FraudSignal{Kind: "card_testing", Level: "quarantine",
+			Detail: "part of a simulated card-testing burst"})
+	}
+	gi := evalGraph(explicit, true)
+	it.setGraph(gi)
+	recordGraph(gi)
 	return it
 }

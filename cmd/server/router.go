@@ -501,6 +501,8 @@ func registerRouting(mux *http.ServeMux) {
 		"psp-a@http://localhost:9001,psp-b@http://localhost:9002,psp-c@http://localhost:9003"))
 	rt := NewRouter(backends)
 	fc := newFraudClientFromEnv()
+	graphClient = fc // the same client powers Recover's graph fraud signal (graphsignal.go)
+	mux.HandleFunc("GET /api/graph/status", handleGraphStatus)
 
 	mux.HandleFunc("POST /api/route", rt.handleRoute(fc))
 	mux.HandleFunc("GET /api/route/stats", rt.handleStats)

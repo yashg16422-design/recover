@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from mangum import Mangum
 
 ARTIFACT_FILES = ["scores.npy", "scores_lr.npy", "labels.npy", "split.npy", "neighbors.npz", "results.json"]
@@ -63,6 +63,14 @@ class Store:
         self.sample_ids = {
             "illicit": np.where(test & (self.labels == 1))[0],
             "licit": np.where(test & (self.labels == 0))[0],
+        }
+        # risk histogram on the TEST split (out-of-sample), 20 bins of width 0.05, by known label
+        edges = np.linspace(0.0, 1.0, 21)
+        self.distribution = {
+            "bin_edges": [round(float(e), 2) for e in edges],
+            "licit": np.histogram(self.scores[self.sample_ids["licit"]], bins=edges)[0].tolist(),
+            "illicit": np.histogram(self.scores[self.sample_ids["illicit"]], bins=edges)[0].tolist(),
+            "split": "test (time steps 35-49)",
         }
 
     def neighbors(self, i: int) -> np.ndarray:
@@ -129,3 +137,15 @@ def sample(kind: Literal["illicit", "licit"]):
 @app.get("/metrics")
 def metrics():
     return store.results
+
+
+@app.post("/score_batch")
+def score_batch(ids: list[int] = Body(..., embed=True, max_length=5000)):
+    """Risk for many nodes in one call: {"ids":[1,2,3]} -> {"scores":{"1":0.01,...}}; unknown ids map to null."""
+    return {"scores": {str(i): (round(float(store.scores[i]), 6) if 0 <= i < store.n else None) for i in ids}}
+
+
+@app.get("/distribution")
+def distribution():
+    """Histogram of GCN risk on the test split, split by known label (for the dashboard chart)."""
+    return store.distribution
