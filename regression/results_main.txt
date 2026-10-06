@@ -1,0 +1,66 @@
+# Recover regression — label=main — 2026-10-07 00:59:37 — binary=bin/server-main
+## A. core endpoints
+PASS  GET /health
+PASS  GET / is 200
+PASS  GET / is the Recover app
+PASS  static /app.css
+PASS  static /sample_failed_payments.csv
+PASS  static /sample_with_attack.csv
+PASS  static /benchmark_labeled.csv
+PASS  GET /overview has all keys
+PASS  /overview starts at zero
+## A. CSV upload -> /analyze
+PASS  analyze sample: 12 rows
+PASS  analyze sample: every original row field present
+PASS  analyze sample: summary fields present
+PASS  analyze sample: sorted by expected recovery (desc)
+PASS  analyze sample: diagnosis has bucket/recoverable/action/reason
+PASS  analyze sample: no threats
+PASS  analyze sample: not trained on labels
+PASS  attack sample: card-testing burst detected
+PASS  attack sample: burst rows quarantined (attack=true)
+PASS  attack sample: quarantined rows excluded from recoverable amount
+PASS  CSV with 'recovered' column trains the model
+PASS  multipart file upload works
+PASS  malformed CSV -> 400
+## A. message drafting (no HF_TOKEN -> template fallback, honest mode)
+PASS  draft mode is template
+PASS  draft note explains fallback
+PASS  draft message has name, amount and pay link
+PASS  fraud code -> mode skip, no message
+## A. act step: /execute and /api/recover (simulated: no SMTP/Twilio)
+PASS  execute: actions simulated, attack rows skipped
+PASS  execute: quarantined rows never messaged
+PASS  execute: honest mode field on actions
+PASS  execute: demo recipient honoured
+PASS  api/recover returns diagnosis, p_recover, expected, message, mode
+PASS  api/recover without send: no 'sent' field
+PASS  api/recover send:true -> simulated
+## A. live Stripe webhook (unsigned path) + /live
+PASS  webhook charge.failed -> 200
+PASS  /live shows the event with diagnosis and p_recover
+PASS  /live item has every original field
+PASS  webhook charge.succeeded counts a success
+## A. /simulate (traffic generator)
+PASS  simulate x30 raises payments_seen
+PASS  overview series has points
+## A. /benchmark (must be byte-identical across versions)
+PASS  benchmark has 3 strategies in order
+PASS  benchmark: agent contacts zero fraud
+PASS  benchmark has exceptions + stopping_rules
+benchmark numbers: [('Do nothing', 0, 0, 0, 0, 0), ('Blast everyone', 3527500, 100, 52, 12, 48.08), ('Recover (smart agent)', 2987800, 84.7, 29, 0, 75.86)]
+## A. rate limit on /execute (10 per minute per IP)
+PASS  /execute eventually returns 429
+## B. Stripe signature verification (STRIPE_WEBHOOK_SECRET set)
+PASS  unsigned webhook -> 400
+PASS  wrong signature -> 400
+PASS  correctly signed webhook -> 200
+PASS  signed event appears in /live
+## C. real SMTP path, AUTO_RECOVER, TEST_RECIPIENT (fake local SMTP server)
+PASS  AUTO_RECOVER: webhook failure is emailed to TEST_RECIPIENT
+PASS  AUTO_RECOVER: email carries the drafted message
+PASS  api/recover send:true really sends via SMTP
+PASS  mail server received it
+PASS  AUTO_RECOVER: hard decline is NOT messaged
+
+RESULT label=main  PASS=52  FAIL=0
