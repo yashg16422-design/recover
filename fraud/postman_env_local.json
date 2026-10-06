@@ -1,0 +1,22 @@
+{
+  "id": "fraud-local",
+  "name": "fraud-local",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8100",
+      "enabled": true
+    },
+    {
+      "key": "router_url",
+      "value": "http://localhost:8090",
+      "enabled": true
+    },
+    {
+      "key": "latency_bound_ms",
+      "value": "500",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

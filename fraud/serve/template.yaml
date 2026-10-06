@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Graph fraud score lookup (FastAPI + Mangum on Lambda behind an HTTP API). Not deployed unless you run sam deploy.
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+    Description: Existing S3 bucket that holds the artifacts (you create it and upload; see DEPLOY_AWS.md)
+  ArtifactPrefix:
+    Type: String
+    Default: fraud-artifacts
+    Description: Key prefix inside the bucket (no leading or trailing slash)
+
+Resources:
+  FraudLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+
+  FraudFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: app.handler # app.py -> handler = Mangum(app)
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 512 # artifacts are ~7 MB; 512 MB mainly buys CPU for a faster cold start
+      Timeout: 10
+      LoggingConfig:
+        LogGroup: !Ref FraudLogGroup
+      Environment:
+        Variables:
+          ARTIFACT_BUCKET: !Ref ArtifactBucket
+          ARTIFACT_PREFIX: !Ref ArtifactPrefix
+      Policies:
+        - Statement: # read-only, scoped to the artifact prefix only
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub arn:${AWS::Partition}:s3:::${ArtifactBucket}/${ArtifactPrefix}/*
+      Events:
+        Any:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  BaseUrl:
+    Description: Use as FRAUD_URL for the router and as base_url in the Postman "aws" environment
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}

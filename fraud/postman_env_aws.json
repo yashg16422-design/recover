@@ -1,0 +1,22 @@
+{
+  "id": "fraud-aws",
+  "name": "fraud-aws",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "https://REPLACE_WITH_BaseUrl_OUTPUT.execute-api.REGION.amazonaws.com",
+      "enabled": true
+    },
+    {
+      "key": "router_url",
+      "value": "http://localhost:8090",
+      "enabled": true
+    },
+    {
+      "key": "latency_bound_ms",
+      "value": "5000",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

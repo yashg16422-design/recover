@@ -2,3 +2,14 @@ bin/
 *.log
 env.sh
 .env
+
+# fraud service
+fraud/.venv/
+fraud/.venv-serve/
+fraud/data/
+fraud/.pkg/
+.aws-sam/
+__pycache__/
+
+# personal interview prep (kept out of git on purpose)
+INTERVIEW_NOTES.md
