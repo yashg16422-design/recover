@@ -1,0 +1,17 @@
+[Unit]
+Description=Recover mock payment gateways (3 x psp, localhost only)
+After=network.target
+
+[Service]
+User=recover
+Group=recover
+ExecStart=/opt/recover/run-psps.sh
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

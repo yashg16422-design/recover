@@ -1,0 +1,6 @@
+# Replace RECOVER_HOST with your hostname, e.g. 13-211-0-1.sslip.io (your Elastic IP with dashes + .sslip.io).
+# Caddy obtains and renews a Let's Encrypt certificate for it automatically (ports 80 and 443 must be open).
+RECOVER_HOST {
+	encode gzip
+	reverse_proxy 127.0.0.1:8090
+}

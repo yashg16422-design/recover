@@ -1,0 +1,13 @@
+# UI click-path results on main (original Recover), driven in a browser, 2026-10-07
+U1  intro modal on first visit (4 slides) -> "Take a tour" -> 8-step spotlight tour -> closes ........ PASS
+U2  overview: 4 KPIs, sparkline canvas, "Simulate live traffic" toggle, SIMULATED badge, counters rise  PASS
+U3  "try the sample" -> results, 12-row plan, KPIs (At risk / Recoverable / Actionable), Draft button  PASS  (draft shows "template" mode)
+U4  "try attack sample" -> Threats card, 10 rows quarantined with fraud tags ........................ PASS
+U5  "Approve & run recovery" -> action log (0 sent / 10 simulated / 2 skipped), demo recipient used .. PASS
+U6  "Run benchmark" -> 3-strategy table, exceptions line, 4 stopping rules, dataset download link .... PASS
+U7  Demo mode input honoured by the run (me@demo.test appeared in the log) ........................ PASS
+U8  Live panel lists a webhook event with recoverability % ........................................ PASS
+U8b Live panel "Recover these live failures" button ................................................ FAIL (pre-existing: runLive is never defined, so the button is never created)
+U9  Drop-in integration card (curl /api/recover example) ........................................... PASS
+U10 "For merchants" card, Demo-mode input ........................................................... PASS
+benchmark rows: Do nothing 0/0%/0/0/0% | Blast everyone 35,275/100%/52/12/48.08% | Recover (smart agent) 29,878/84.7%/29/0/75.86%

@@ -1,0 +1,23 @@
+[Unit]
+Description=Recover payment recovery agent (Go)
+After=network-online.target recover-psps.service
+Wants=network-online.target
+
+[Service]
+User=recover
+Group=recover
+# the app reads ./web (UI, sample CSVs, benchmark data) relative to this directory
+WorkingDirectory=/opt/recover
+# secrets and FRAUD_URL live here (root-owned, chmod 600); see deploy/recover.env.example
+EnvironmentFile=/etc/recover/recover.env
+# bound to localhost: only Caddy (HTTPS) can reach it from outside
+ExecStart=/opt/recover/server -addr 127.0.0.1:8090
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

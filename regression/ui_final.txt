@@ -1,0 +1,34 @@
+# UI click-path results on feat/recover-gnn (new black+blue neobrutalist UI), driven in a browser, 2026-10-07
+# Every check below was run through real clicks / the page's own handlers; numbers are copied from the run output.
+U1  intro modal on first visit (4 slides) -> "Take a tour" -> 9-step tour across tabs (rings land on every target) -> closes ...... PASS
+U2  overview: 6 KPIs, sparkline canvas, "Simulate live traffic" toggle, SIMULATED badge, counters rise ........................... PASS
+U2n live pipeline diagram: 6 stages + quarantine branch with live counters (134,99,20,20,8,8,79 in the run), moving packets ..... PASS (new)
+U2o "where failed payments went" outcome bar (3 segments in the run) ....................................................... PASS (new)
+U3  "try the sample" -> results; KPIs  Rs 9,838 | 12 failed | Rs 4,993 | 50.76% | 11 actionable  (IDENTICAL to main) ........... PASS
+U3n Fraud signals column: "GRAPH n REVIEW" / "clear n" chips; graph summary card (12 scored, 0 quarantined, 2 review) .......... PASS (new)
+U3d Draft shows a message tagged "template" mode ........................................................................... PASS
+U5  "Approve & run recovery": "0 sent · 10 simulated · 2 skipped · Rs 8,140 in flight" (IDENTICAL to main); demo recipient used . PASS
+U4  "try attack sample": Threats card, 11 quarantined rows ("10 card-testing + 1 graph"), chips BURST / GRAPH QUARANTINE / GRAPH REVIEW  PASS
+U6  Benchmark tab: Do nothing 0 | Blast everyone 35,275 / 100% / 52 / 12 / 48.08% | Recover (smart agent) 29,878 / 84.7% / 29 / 0 / 75.86%
+    (IDENTICAL to main), exceptions line, 4 stopping rules, dataset link; NEW: bar chart + graph-model metrics table (4 rows) ...... PASS
+U7  Demo mode input (now a persistent bar under the header) honoured by runs ................................................ PASS
+U8  Live panel lists a webhook event with its signals (Stripe metadata.graph_node_id -> GRAPH 0.97 QUARANTINE) ................ PASS
+U8b "Recover these live failures" button: PRESENT and working (was broken on main). Run result "0 sent · 4 simulated · 46 skipped";
+    quarantined events are skipped ........................................................................................... PASS (FIXED vs main)
+U8s Graph-risk strip chart of live events (50 dots) with review/quarantine lines ........................................... PASS (new)
+U9  Drop-in card with curl example; "Try it" sends a real request and shows graph_risk / fraud_signals / quarantined=true ........ PASS
+U10 "For merchants" card ....................................................................................................... PASS
+UF  Fraud Model tab: status, honesty note ("does not predict recovery"), score random illicit, neighbourhood (6 nodes),
+    histogram (41 bars), PR plot (19 markers), metric bars (13), report card (4 rows) ....................................... PASS (new)
+UR  Payment router sample runner: healthy -> "ROUTED 6 | REVIEW 1 | BLOCKED 3 | paid 7"; gateways killed -> "gateways failed 8 |
+    recovery messages 8 | quarantined 2", breaker chips turn red ............................................................ PASS (new)
+UO  Graph model OFFLINE (service killed): chip "graph model: offline"; plan KPIs unchanged (Rs 9,838 | Rs 4,993 | 11 | 0);
+    rows show "graph offline"; run still 10 simulated / 2 skipped; fraud tab and router explain the outage; benchmark and
+    overview unaffected ..................................................................................................... PASS (new)
+UM  Phone width (375px): no page-level horizontal overflow on any of the 6 tabs; tables scroll inside their cards ............. PASS
+
+# Intentional UI differences from main (restyle; no flow removed except noted):
+#  - single page with 6 tabs; "Take a tour" moved to the top bar; Demo mode is a persistent bar under the header
+#  - all emoji decoration removed (banned by the design brief); status icons are text tags
+#  - the landing "scroll down" arrow cue was removed (tabs replace the long single scroll)
+#  - tour is 9 steps (was 8) and switches tabs; fraud.html now redirects to /#fraud

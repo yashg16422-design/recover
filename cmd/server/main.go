@@ -36,6 +36,7 @@ type row struct {
 	PRecover    float64   `json:"p_recover"`
 	Expected    float64   `json:"expected_recovered"` // P(recover) * amount
 	Attack      bool      `json:"attack"`             // part of a detected card-testing burst
+	GraphFields                                         // NEW: graph_risk, fraud_signals, quarantined, ...
 }
 
 type analysis struct {
@@ -48,6 +49,11 @@ type analysis struct {
 		Trained         bool    `json:"trained_on_labels"`
 		ThreatCount     int     `json:"threat_count"`
 		ByBucket        map[string]int `json:"by_bucket"`
+		// NEW (graph fraud signal)
+		GraphStatus      string `json:"graph_status"`
+		GraphReview      int    `json:"graph_review"`
+		GraphQuarantined int    `json:"graph_quarantined"`
+		QuarantinedTotal int    `json:"quarantined_total"`
 	} `json:"summary"`
 	Rows    []row    `json:"rows"`
 	Threats []Threat `json:"threats"`
@@ -89,6 +95,14 @@ func truthy(s string) (val bool, present bool) {
 	}
 }
 
+// parseNodeID reads an optional graph node id ("" or junk -> nil = not linked).
+func parseNodeID(s string) *int {
+	if v, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && v >= 0 {
+		return &v
+	}
+	return nil
+}
+
 func (a *analysis) analyze(records [][]string, m *model) {
 	if len(records) < 2 {
 		return
@@ -120,7 +134,9 @@ func (a *analysis) analyze(records [][]string, m *model) {
 
 	// Second pass: diagnose + score every row, and collect rows for fraud detection.
 	var frows []frow
+	var gids []*int // optional graph node id per row (aligned with a.Rows before sorting)
 	for _, rec := range records[1:] {
+		gids = append(gids, parseNodeID(get(rec, idx, "graph_node_id")))
 		fc := get(rec, idx, "failure_code", "failure", "decline_code")
 		d := diagnose(fc)
 		amt := parseFloat(get(rec, idx, "amount"))
@@ -155,13 +171,36 @@ func (a *analysis) analyze(records [][]string, m *model) {
 	threats, attack := detectCardTesting(frows)
 	a.Threats = threats
 	a.Summary.ThreatCount = len(threats)
+	// Graph pass: the second fraud signal (one batch call; fail-open if the service is down).
+	infos := evalGraphBatch(gids)
+	statuses := make([]string, 0, len(a.Rows))
+	graphOnly := 0 // quarantined by the graph model but not part of a card-testing burst
 	for i := range a.Rows {
-		if attack[a.Rows[i].ChargeID] {
-			a.Rows[i].Attack = true
-			continue // fraud is not recoverable revenue
+		r := &a.Rows[i]
+		r.ensure()
+		if attack[r.ChargeID] {
+			r.Attack = true
+			r.addSignal(cardTestingSignal())
 		}
-		a.Summary.Recoverable += a.Rows[i].Expected
+		r.setGraph(infos[i])
+		recordGraph(infos[i])
+		statuses = append(statuses, infos[i].Status)
+		if r.hasSignal("graph_risk", "review") {
+			a.Summary.GraphReview++
+		}
+		if r.hasSignal("graph_risk", "quarantine") {
+			a.Summary.GraphQuarantined++
+			if !r.Attack {
+				graphOnly++
+			}
+		}
+		if r.Quarantined {
+			a.Summary.QuarantinedTotal++
+			continue // either fraud signal => not recoverable revenue
+		}
+		a.Summary.Recoverable += r.Expected
 	}
+	a.Summary.GraphStatus = summarizeStatus(statuses)
 
 	a.Summary.Recoverable = round2(a.Summary.Recoverable)
 	a.Summary.AtRiskAmount = round2(a.Summary.AtRiskAmount)
@@ -182,6 +221,9 @@ func (a *analysis) analyze(records [][]string, m *model) {
 	recordFailures(a.Summary.Count)
 	if len(threats) > 0 {
 		recordThreats(len(threats), q)
+	}
+	if graphOnly > 0 {
+		recordGraphQuarantined(graphOnly)
 	}
 }
 
@@ -233,6 +275,7 @@ func main() {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
+	registerRouting(mux) // SmartRoute router + graph fraud check (router.go, fraudclient.go)
 	mux.Handle("GET /", http.FileServer(http.Dir("web")))
 
 	// withRecovery: one bad request can never crash the server.

@@ -38,25 +38,35 @@ func synthFailure(code string, amount float64) liveItem {
 }
 
 func handleSimulate(w http.ResponseWriter, _ *http.Request) {
+	kind := "success"
+	events := []liveItem{} // NEW: the response now describes what was generated
 	switch roll := simRng.Float64(); {
 	case roll < 0.65: // a payment succeeded
 		recordSuccesses(1)
 	case roll < 0.90: // a normal failure — recover it
 		code := simSoft[simRng.Intn(len(simSoft))]
 		amt := float64((simRng.Intn(491) + 10) * 1000) // ₹100–₹5000
-		it := synthFailure(code, amt)
+		kind = "failure"
+		it := withGraph(synthFailure(code, amt), nil, false) // NEW: graph check (demo link)
 		pushLive(it)
+		events = append(events, it)
 		recordFailures(1)
-		if it.Diagnosis.Recoverable == "high" || it.Diagnosis.Recoverable == "medium" {
+		if it.hasSignal("graph_risk", "quarantine") {
+			recordGraphQuarantined(1)
+		}
+		if !it.Quarantined && (it.Diagnosis.Recoverable == "high" || it.Diagnosis.Recoverable == "medium") {
 			recordSent(1, it.Expected)
 		}
 	default: // a card-testing burst
 		n := 6 + simRng.Intn(5)
+		kind = "burst"
 		for i := 0; i < n; i++ {
-			pushLive(synthFailure("card_declined", float64((simRng.Intn(3)+1)*100))) // ₹1–₹3
+			it := withGraph(synthFailure("card_declined", float64((simRng.Intn(3)+1)*100)), nil, true) // ₹1–₹3
+			pushLive(it)
+			events = append(events, it)
 		}
 		recordFailures(n)
 		recordThreats(1, n)
 	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, map[string]any{"kind": kind, "simulated": true, "events": events})
 }

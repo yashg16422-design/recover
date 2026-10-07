@@ -34,6 +34,9 @@ type execRow struct {
 	Method      string  `json:"method"`
 	FailureCode string  `json:"failure_code"`
 	Attack      bool    `json:"attack"`
+	// NEW: quarantined by ANY fraud signal (card-testing burst OR graph model)
+	Quarantined      bool   `json:"quarantined"`
+	QuarantineReason string `json:"quarantine_reason"`
 }
 
 type action struct {
@@ -95,6 +98,9 @@ func emailSend(to, subject, body string) (status, detail string) {
 	if host == "" || user == "" || pass == "" {
 		return "simulated", "no SMTP creds set — would email " + to
 	}
+	if strings.HasSuffix(strings.ToLower(to), "@example.com") { // demo addresses are never really emailed
+		return "simulated", "demo address (@example.com) — not sent: " + to
+	}
 	port := getenv("SMTP_PORT", "587")
 	msg := "From: " + from + "\r\nTo: " + to + "\r\nSubject: " + subject + "\r\n\r\n" + body
 	if err := smtp.SendMail(host+":"+port, smtp.PlainAuth("", user, pass, host), from, []string{to}, []byte(msg)); err != nil {
@@ -113,6 +119,17 @@ func executeRow(r execRow, override string) action {
 	if r.Attack {
 		a.Type, a.Status, a.Channel = "skip", "skipped", "none"
 		a.Detail = "Quarantined — part of a suspected card-testing attack. Not messaged."
+		return a
+	}
+
+	// quarantined by the graph fraud model (or any other signal) -> never message
+	if r.Quarantined {
+		a.Type, a.Status, a.Channel = "skip", "skipped", "none"
+		why := r.QuarantineReason
+		if why == "" {
+			why = "a fraud signal fired"
+		}
+		a.Detail = "Quarantined — " + why + ". Not messaged."
 		return a
 	}
 
@@ -200,6 +217,7 @@ func handleAPIRecover(w http.ResponseWriter, r *http.Request) {
 		execRow
 		Send          bool   `json:"send"`
 		DemoRecipient string `json:"demo_recipient"`
+		GraphNodeID   *int   `json:"graph_node_id"` // NEW: optional link to a graph node
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -218,7 +236,19 @@ func handleAPIRecover(w http.ResponseWriter, r *http.Request) {
 		"mode":               mode,
 		"note":               note,
 	}
+	// NEW: graph fraud signal (explicit node id only; fail-open)
+	var gf GraphFields
+	gf.ensure()
+	gi := evalGraph(in.GraphNodeID, false)
+	gf.setGraph(gi)
+	recordGraph(gi)
+	if in.Attack {
+		gf.addSignal(cardTestingSignal())
+	}
+	out["graph_node_id"], out["graph_risk"], out["graph_status"] = gf.GraphNodeID, gf.GraphRisk, gf.GraphStatus
+	out["graph_link"], out["fraud_signals"], out["quarantined"] = gf.GraphLink, gf.FraudSignals, gf.Quarantined
 	if in.Send {
+		in.execRow.Quarantined, in.execRow.QuarantineReason = gf.Quarantined, gf.quarantineReason()
 		a := executeRow(in.execRow, in.DemoRecipient)
 		out["sent"] = a.Status
 		out["channel"] = a.Channel
