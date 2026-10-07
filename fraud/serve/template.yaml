@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Graph fraud score lookup (FastAPI + Mangum on Lambda behind an HTTP API). Not deployed unless you run sam deploy.
+Description: Graph fraud score lookup (FastAPI + Mangum on Lambda behind an HTTP API, kept warm by EventBridge). Not deployed unless you run sam deploy.
 
 Parameters:
   ArtifactBucket:
@@ -17,11 +17,20 @@ Resources:
     Properties:
       RetentionInDays: 7
 
+  # The API is public (no auth by design: it serves scores for a public Bitcoin dataset). Throttling
+  # caps what anyone can do to it: 10 requests/second sustained, bursts of 20.
+  FraudApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 20
+
   FraudFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: .
-      Handler: app.handler # app.py -> handler = Mangum(app)
+      Handler: app.handler # app.py -> handler(event, context): Mangum for HTTP events, direct reply for the keep-warm ping
       Runtime: python3.12
       Architectures: [arm64]
       MemorySize: 512 # artifacts are ~7 MB; 512 MB mainly buys CPU for a faster cold start
@@ -41,10 +50,16 @@ Resources:
         Any:
           Type: HttpApi
           Properties:
+            ApiId: !Ref FraudApi
             Path: /{proxy+}
             Method: ANY
+        KeepWarm:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Description: Keeps one container warm so the first real request is not a cold start
 
 Outputs:
   BaseUrl:
-    Description: Use as FRAUD_URL for the router and as base_url in the Postman "aws" environment
-    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+    Description: Use as FRAUD_URL for the Recover app and as base_url in the Postman "aws" environment
+    Value: !Sub https://${FraudApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}

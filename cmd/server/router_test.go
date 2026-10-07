@@ -79,3 +79,33 @@ func TestFailedPaymentWithoutContactIsReportedNotCrashed(t *testing.T) {
 		t.Fatalf("expected 'no contact info' failure, got %+v", out.Recovery)
 	}
 }
+
+// The proxy must present the UPSTREAM's Host header (API Gateway rejects any other) and strip /api/fraud.
+func TestFraudProxyRewritesHostAndPath(t *testing.T) {
+	var gotHost, gotPath string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost, gotPath = r.Host, r.URL.Path
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer up.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/fraud/", fraudProxy(&fraudClient{base: up.URL}))
+	req := httptest.NewRequest("GET", "/api/fraud/score/7?hops=2", nil)
+	req.Host = "recover.13-211-0-1.sslip.io" // what the browser/Caddy would send
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 200 || gotPath != "/score/7" {
+		t.Fatalf("code %d path %q", rec.Code, gotPath)
+	}
+	if want := strings.TrimPrefix(up.URL, "http://"); gotHost != want {
+		t.Fatalf("upstream saw Host %q, want %q", gotHost, want)
+	}
+}
+
+func TestFraudProxyDisabledWithoutFraudURL(t *testing.T) {
+	rec := httptest.NewRecorder()
+	fraudProxy(nil)(rec, httptest.NewRequest("GET", "/api/fraud/health", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code %d", rec.Code)
+	}
+}

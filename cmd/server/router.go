@@ -516,20 +516,33 @@ func registerRouting(mux *http.ServeMux) {
 	})
 
 	// Read-only proxy so the browser UI can reach the fraud service without CORS.
-	mux.HandleFunc("GET /api/fraud/", func(w http.ResponseWriter, req *http.Request) {
-		if fc == nil {
-			http.Error(w, `{"error":"FRAUD_URL not set"}`, http.StatusServiceUnavailable)
-			return
-		}
-		target, _ := url.Parse(fc.base)
-		p := httputil.NewSingleHostReverseProxy(target)
-		p.Transport = &http.Transport{ResponseHeaderTimeout: 5 * time.Second}
-		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/api/fraud")
-		p.ServeHTTP(w, req)
-	})
+	mux.HandleFunc("GET /api/fraud/", fraudProxy(fc))
 	if fc != nil {
 		log.Printf("routing: %d gateways, fraud service %s (block>=%.2f review>=%.2f, fail-open)", len(backends), fc.base, fc.blockAt, fc.reviewAt)
 	} else {
 		log.Printf("routing: %d gateways, fraud check disabled (set FRAUD_URL to enable)", len(backends))
+	}
+}
+
+// fraudProxy forwards GET /api/fraud/* to the fraud service. It rewrites the Host header to the
+// target's: API Gateway (the AWS deployment) rejects requests whose Host is not its own, so
+// forwarding the browser's Host would break every call when FRAUD_URL is an API Gateway URL.
+func fraudProxy(fc *fraudClient) http.HandlerFunc {
+	if fc == nil {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"error":"FRAUD_URL not set"}`, http.StatusServiceUnavailable)
+		}
+	}
+	target, _ := url.Parse(fc.base)
+	p := httputil.NewSingleHostReverseProxy(target)
+	director := p.Director
+	p.Director = func(req *http.Request) {
+		director(req)
+		req.Host = target.Host
+	}
+	p.Transport = &http.Transport{ResponseHeaderTimeout: 5 * time.Second, Proxy: http.ProxyFromEnvironment}
+	return func(w http.ResponseWriter, req *http.Request) {
+		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/api/fraud")
+		p.ServeHTTP(w, req)
 	}
 }

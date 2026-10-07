@@ -1,4 +1,6 @@
-# Deploying the fraud service to AWS Lambda (optional)
+# Deploying the fraud service to AWS Lambda
+
+The full manual walkthrough (Lambda + EC2 + Caddy) is done step by step; this file is the Lambda reference. Region is ap-southeast-2 and the CLI profile is `recover`.
 
 **Nothing here has been run.** No AWS resource exists unless you run these steps yourself.
 The service works locally without any of this (`make fraud-serve`).
@@ -12,7 +14,8 @@ Go router --FRAUD_URL--> API Gateway (HTTP API) --> Lambda (FastAPI + Mangum, nu
                                                   S3  s3://<bucket>/fraud-artifacts/
 ```
 
-- One Lambda (python3.12, arm64, 512 MB, 10 s timeout), one HTTP API, one log group (7-day retention).
+- One Lambda (python3.12, arm64, 512 MB, 10 s timeout), one HTTP API (throttled to 10 req/s, burst 20), one log group (7-day retention),
+  and an EventBridge rule that pings the Lambda every 5 minutes to keep a container warm (the handler answers the ping directly).
 - IAM: `s3:GetObject` on `s3://<bucket>/<prefix>/*` only. Nothing else.
 - Artifacts are **not** inside the zip. They are loaded from S3 once per container (cold start), then served from memory.
 - Measured package (`fraud/artifacts/results.json` -> `lambda_package`): **80.9 MB unzipped, 25.1 MB zipped, 2043 files**
@@ -22,18 +25,18 @@ Go router --FRAUD_URL--> API Gateway (HTTP API) --> Lambda (FastAPI + Mangum, nu
 ## Prerequisites (you install these)
 
 - AWS CLI v2 and AWS SAM CLI. `docker` is already on this Mac and is needed for `--use-container`.
-- A local AWS profile. Use `aws configure --profile fraud-demo` yourself. **Never put keys in a file in this repo.**
+- A local AWS profile named `recover`, created with `aws login --profile recover --remote` (browser code flow; credentials last about 12 hours, re-run it if a command says the token expired). **Never put keys in a file in this repo.**
 
 ```bash
-export AWS_PROFILE=fraud-demo
-export AWS_REGION=ap-south-1        # your choice
+export AWS_PROFILE=recover
+export AWS_REGION=ap-southeast-2   # fixed for this account type
 aws sts get-caller-identity         # confirm you are in the right account
 ```
 
 ## 1. Create the bucket and upload the artifacts
 
 ```bash
-BUCKET=fraud-artifacts-$(aws sts get-caller-identity --query Account --output text)-demo
+BUCKET=recover-fraud-artifacts-$(aws sts get-caller-identity --query Account --output text)
 aws s3 mb s3://$BUCKET
 cd fraud/artifacts
 aws s3 cp scores.npy      s3://$BUCKET/fraud-artifacts/scores.npy
@@ -49,7 +52,7 @@ aws s3 cp results.json    s3://$BUCKET/fraud-artifacts/results.json
 ```bash
 cd fraud/serve
 sam build --use-container      # builds Linux wheels in Docker; a plain `sam build` on a Mac would package Mac wheels
-sam deploy --guided            # stack name: fraud-demo; ArtifactBucket=$BUCKET; ArtifactPrefix=fraud-artifacts
+sam deploy --guided --tags Project=recover   # stack name: recover-fraud; ArtifactBucket=$BUCKET; ArtifactPrefix=fraud-artifacts
 ```
 
 Answer "y" to creating the IAM role SAM generates. When it finishes, copy the **BaseUrl** output.
@@ -74,14 +77,13 @@ and compare response times. Record both in your notes. No cold/warm number exist
 
 ## 5. Security note
 
-The HTTP API is **public**: anyone with the URL can query it. The data is Bitcoin-dataset scores only, so this is
+The HTTP API is **public by design (no shared secret)**: anyone with the URL can query it, but it is throttled and serves scores for a public dataset only. The data is Bitcoin-dataset scores only, so this is
 acceptable for a demo. For anything real, add an API key / IAM auth / JWT authorizer, and a throttle.
 
 ## 6. Tear down (so nothing keeps costing money)
 
 ```bash
-cd fraud/serve && sam delete
-aws s3 rm s3://$BUCKET --recursive && aws s3 rb s3://$BUCKET
+see ../TEARDOWN.md (complete, ordered teardown of every resource, including the EC2 side)
 ```
 
 ## Estimated free-tier usage (an estimate, check current AWS pricing)

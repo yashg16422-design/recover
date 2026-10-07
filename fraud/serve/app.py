@@ -87,7 +87,16 @@ class Store:
 
 store = Store()  # cold start: runs once per container
 app = FastAPI(title="Graph fraud score service", version="1.0")
-handler = Mangum(app, lifespan="off")
+_mangum = Mangum(app, lifespan="off")
+
+
+def handler(event, context):
+    """Lambda entry point. An EventBridge schedule (the keep-warm ping) is not an HTTP event, which Mangum
+    rejects; answer it directly. Importing this module already loaded the artifacts, so the ping keeps a
+    warm container with the data in memory."""
+    if isinstance(event, dict) and event.get("source") == "aws.events":
+        return {"warm": True, "nodes": store.n}
+    return _mangum(event, context)
 
 
 def _check(node_id: int) -> None:
