@@ -48,6 +48,7 @@ aws ec2 release-address --allocation-id $ALLOC_ID && echo released
 aws ec2 delete-security-group --group-name recover-sg
 aws ec2 delete-key-pair --key-name recover-key
 rm -f ~/.ssh/recover-key.pem        # the private key you saved locally
+ssh-keygen -R 3.24.252.115 2>/dev/null   # forget the host key (use your Elastic IP if different)
 ```
 
 ## 4. EC2 role and instance profile
@@ -55,6 +56,8 @@ rm -f ~/.ssh/recover-key.pem        # the private key you saved locally
 ```bash
 aws iam remove-role-from-instance-profile --instance-profile-name recover-ec2-profile --role-name recover-ec2-role
 aws iam delete-instance-profile --instance-profile-name recover-ec2-profile
+# the role has a MANAGED policy attached (for SSM); it must be detached before the role can be deleted
+aws iam detach-role-policy --role-name recover-ec2-role --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 for p in $(aws iam list-role-policies --role-name recover-ec2-role --query 'PolicyNames[]' --output text); do
   aws iam delete-role-policy --role-name recover-ec2-role --policy-name $p; done
 aws iam delete-role --role-name recover-ec2-role
@@ -66,14 +69,14 @@ aws iam delete-role --role-name recover-ec2-role
 sam delete --stack-name recover-fraud --region ap-southeast-2 --profile recover --no-prompts
 ```
 
-## 6. Artifact bucket
+## 6. Artifact bucket (also holds the `deploy/` bundle used to install the EC2 instance)
 
 ```bash
 aws s3 rm s3://recover-fraud-artifacts-$ACCOUNT_ID --recursive
 aws s3 rb s3://recover-fraud-artifacts-$ACCOUNT_ID
 ```
 
-## 7. SSM parameters (the fraud API secret and any app secrets)
+## 7. SSM parameters (none were created in the actual deployment: there is no shared secret; skip unless you added some)
 
 ```bash
 aws ssm describe-parameters --parameter-filters Key=Name,Option=BeginsWith,Values=/recover/ --query 'Parameters[].Name' --output text
